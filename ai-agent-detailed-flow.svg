@@ -1,0 +1,144 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1500 2080" width="1500" height="2080" role="img" aria-labelledby="title desc">
+  <title id="title">Detailed AI agent orchestration flow</title>
+  <desc id="desc">Flow diagram showing incoming message processing, routing across SQL, graph, vector, app tools, and web search, clarification handling, confidence checks, answer generation, grounding, and final output.</desc>
+  <defs>
+    <marker id="arrow" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="strokeWidth">
+      <path d="M0,0 L10,5 L0,10 z" fill="#475569"/>
+    </marker>
+    <style>
+      .bg { fill: #ffffff; }
+      .box { fill: #f8fafc; stroke: #0f172a; stroke-width: 2; }
+      .diamond { fill: #f8fafc; stroke: #0f172a; stroke-width: 2; }
+      .labelbox { fill: #ffffff; stroke: #cbd5e1; stroke-width: 1; }
+      .line { stroke: #475569; stroke-width: 2.2; fill: none; marker-end: url(#arrow); }
+      .text { fill: #0f172a; font-family: Arial, Helvetica, sans-serif; font-size: 17px; font-weight: 600; text-anchor: middle; }
+      .sub { fill: #1e293b; font-family: Arial, Helvetica, sans-serif; font-size: 15px; font-weight: 500; text-anchor: middle; }
+      .small { fill: #0f172a; font-family: Arial, Helvetica, sans-serif; font-size: 14px; font-weight: 600; text-anchor: middle; }
+    </style>
+  </defs>
+
+  <rect class="bg" x="0" y="0" width="1500" height="2080"/>
+
+  <rect class="box" x="585" y="30" width="330" height="72"/>
+  <text class="text" x="750" y="74">Incoming Message</text>
+
+  <rect class="box" x="565" y="145" width="370" height="72"/>
+  <text class="text" x="750" y="189">Message Preprocessor</text>
+
+  <rect class="box" x="540" y="260" width="420" height="122"/>
+  <text class="text" x="750" y="306">Intent Classifier</text>
+  <text class="sub" x="750" y="334">Inbox / Complaint / Client Knowledge /</text>
+  <text class="sub" x="750" y="356">Content / Media / Event / Access / Action</text>
+
+  <rect class="box" x="545" y="428" width="410" height="118"/>
+  <text class="text" x="750" y="473">Entity Extractor</text>
+  <text class="sub" x="750" y="501">client, property, city, channel, topic,</text>
+  <text class="sub" x="750" y="523">date, media, thread, event, audience</text>
+
+  <rect class="box" x="560" y="590" width="380" height="92"/>
+  <text class="text" x="750" y="627">Access Control Check</text>
+  <text class="sub" x="750" y="653">organization_id, user_id, role, client scope,</text>
+  <text class="sub" x="750" y="673">domain scope</text>
+
+  <polygon class="diamond" points="750,735 870,855 750,975 630,855"/>
+  <text class="text" x="750" y="860">Query Router</text>
+
+  <rect class="labelbox" x="85" y="960" width="190" height="40"/>
+  <text class="small" x="180" y="985">Exact records, metrics,</text>
+  <text class="small" x="180" y="1003">dates, statuses</text>
+
+  <rect class="labelbox" x="355" y="960" width="190" height="40"/>
+  <text class="small" x="450" y="985">Connected entities</text>
+
+  <rect class="labelbox" x="625" y="960" width="250" height="40"/>
+  <text class="small" x="750" y="985">Documents, notes, captions,</text>
+  <text class="small" x="750" y="1003">media semantics</text>
+
+  <rect class="labelbox" x="945" y="960" width="190" height="40"/>
+  <text class="small" x="1040" y="985">Create draft / approved</text>
+  <text class="small" x="1040" y="1003">action</text>
+
+  <rect class="labelbox" x="1215" y="960" width="185" height="40"/>
+  <text class="small" x="1307" y="985">External events / data</text>
+
+  <rect class="box" x="90" y="1018" width="180" height="62"/>
+  <text class="text" x="180" y="1056">SQL Search</text>
+
+  <rect class="box" x="360" y="1018" width="180" height="62"/>
+  <text class="text" x="450" y="1056">Graph Search</text>
+
+  <rect class="box" x="660" y="1018" width="180" height="62"/>
+  <text class="text" x="750" y="1056">Vector DB Search</text>
+
+  <rect class="box" x="950" y="1018" width="180" height="62"/>
+  <text class="text" x="1040" y="1056">App API Tools</text>
+
+  <rect class="box" x="1217" y="1018" width="180" height="62"/>
+  <text class="text" x="1307" y="1056">Web/API Search</text>
+
+  <rect class="labelbox" x="44" y="1136" width="108" height="34"/>
+  <text class="small" x="98" y="1158">Missing info</text>
+
+  <rect class="box" x="630" y="1180" width="240" height="72"/>
+  <text class="text" x="750" y="1224">Retrieved Context</text>
+
+  <rect class="box" x="585" y="1298" width="330" height="102"/>
+  <text class="text" x="750" y="1341">Context Merger</text>
+  <text class="sub" x="750" y="1367">deduplicate, rank, compact,</text>
+  <text class="sub" x="750" y="1389">attach sources</text>
+
+  <polygon class="diamond" points="750,1455 915,1600 750,1745 585,1600"/>
+  <text class="text" x="750" y="1606">Retrieval Confidence Check</text>
+
+  <rect class="box" x="40" y="1502" width="240" height="72"/>
+  <text class="text" x="160" y="1546">Clarification Question</text>
+
+  <rect class="labelbox" x="430" y="1738" width="128" height="34"/>
+  <text class="small" x="494" y="1760">Low confidence</text>
+
+  <rect class="box" x="60" y="1768" width="260" height="72"/>
+  <text class="text" x="190" y="1812">Ask Follow-up Question</text>
+
+  <rect class="labelbox" x="820" y="1738" width="120" height="34"/>
+  <text class="small" x="880" y="1760">Enough context</text>
+
+  <rect class="box" x="620" y="1768" width="260" height="72"/>
+  <text class="text" x="750" y="1812">LLM Answer Generator</text>
+
+  <rect class="box" x="560" y="1885" width="380" height="116"/>
+  <text class="text" x="750" y="1922">Grounding and Safety Check</text>
+  <text class="sub" x="750" y="1950">verify claims, permissions, sources,</text>
+  <text class="sub" x="750" y="1972">and action confirmation</text>
+
+  <rect class="box" x="600" y="2030" width="300" height="44" rx="0"/>
+  <text class="text" x="750" y="2058">Final Output</text>
+
+  <path class="line" d="M750 102 L750 145"/>
+  <path class="line" d="M750 217 L750 260"/>
+  <path class="line" d="M750 382 L750 428"/>
+  <path class="line" d="M750 546 L750 590"/>
+  <path class="line" d="M750 682 L750 735"/>
+
+  <path class="line" d="M705 910 C610 960, 320 970, 180 1018"/>
+  <path class="line" d="M715 925 C650 965, 520 975, 450 1018"/>
+  <path class="line" d="M750 975 L750 1018"/>
+  <path class="line" d="M785 925 C860 965, 980 975, 1040 1018"/>
+  <path class="line" d="M795 910 C930 955, 1185 970, 1307 1018"/>
+
+  <path class="line" d="M180 1080 C180 1145, 560 1160, 630 1210"/>
+  <path class="line" d="M450 1080 C450 1140, 610 1160, 630 1210"/>
+  <path class="line" d="M750 1080 L750 1180"/>
+  <path class="line" d="M1040 1080 C1040 1140, 900 1160, 870 1210"/>
+  <path class="line" d="M1307 1080 C1307 1145, 940 1160, 870 1210"/>
+
+  <path class="line" d="M630 855 C370 900, 160 1000, 98 1502"/>
+  <path class="line" d="M160 1574 L190 1768"/>
+
+  <path class="line" d="M750 1252 L750 1298"/>
+  <path class="line" d="M750 1400 L750 1455"/>
+  <path class="line" d="M650 1688 C565 1720, 310 1768, 320 1804"/>
+  <path class="line" d="M190 1840 C190 1875, 555 1880, 620 1804"/>
+  <path class="line" d="M850 1688 L750 1768"/>
+  <path class="line" d="M750 1840 L750 1885"/>
+  <path class="line" d="M750 2001 L750 2030"/>
+</svg>

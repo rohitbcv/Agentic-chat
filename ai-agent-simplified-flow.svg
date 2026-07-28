@@ -1,0 +1,87 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1320 980" width="1320" height="980" role="img" aria-labelledby="title2 desc2">
+  <title id="title2">Simplified AI app flow</title>
+  <desc id="desc2">Simplified flow diagram showing access resolution, orchestrator routing, specialist agents, retrieval layers, answer generation, and audit logging.</desc>
+  <defs>
+    <marker id="arrow2" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="strokeWidth">
+      <path d="M0,0 L10,5 L0,10 z" fill="#475569"/>
+    </marker>
+    <style>
+      .bg { fill: #ffffff; }
+      .box { fill: #f8fafc; stroke: #0f172a; stroke-width: 2; }
+      .diamond { fill: #f8fafc; stroke: #0f172a; stroke-width: 2; }
+      .line { stroke: #475569; stroke-width: 2.2; fill: none; marker-end: url(#arrow2); }
+      .text { fill: #0f172a; font-family: Arial, Helvetica, sans-serif; font-size: 16px; font-weight: 600; text-anchor: middle; }
+      .sub { fill: #1e293b; font-family: Arial, Helvetica, sans-serif; font-size: 14px; font-weight: 500; text-anchor: middle; }
+    </style>
+  </defs>
+
+  <rect class="bg" x="0" y="0" width="1320" height="980"/>
+
+  <rect class="box" x="500" y="30" width="320" height="66"/>
+  <text class="text" x="660" y="71">User signs in</text>
+
+  <rect class="box" x="470" y="130" width="380" height="70"/>
+  <text class="text" x="660" y="172">Access Resolver</text>
+
+  <rect class="box" x="470" y="235" width="380" height="70"/>
+  <text class="text" x="660" y="277">Client Scope Loaded</text>
+
+  <rect class="box" x="490" y="340" width="340" height="70"/>
+  <text class="text" x="660" y="382">User asks question</text>
+
+  <rect class="box" x="470" y="445" width="380" height="76"/>
+  <text class="text" x="660" y="488">Orchestrator Agent</text>
+  <text class="sub" x="660" y="511">intent, entities, route, confidence</text>
+
+  <polygon class="diamond" points="660,555 790,655 660,755 530,655"/>
+  <text class="text" x="660" y="660">Question Type</text>
+
+  <rect class="box" x="60" y="585" width="220" height="66"/>
+  <text class="text" x="170" y="626">Inbox and Reputation</text>
+
+  <rect class="box" x="320" y="585" width="220" height="66"/>
+  <text class="text" x="430" y="626">Content Planning</text>
+
+  <rect class="box" x="780" y="585" width="220" height="66"/>
+  <text class="text" x="890" y="626">Media Discovery</text>
+
+  <rect class="box" x="1040" y="585" width="220" height="66"/>
+  <text class="text" x="1150" y="617">Client Knowledge</text>
+  <text class="sub" x="1150" y="638">and Events</text>
+
+  <rect class="box" x="500" y="790" width="320" height="66"/>
+  <text class="text" x="660" y="830">Context Merger</text>
+
+  <rect class="box" x="170" y="700" width="170" height="56"/>
+  <text class="text" x="255" y="734">SQL Retriever</text>
+
+  <rect class="box" x="575" y="700" width="170" height="56"/>
+  <text class="text" x="660" y="734">Vector Retriever</text>
+
+  <rect class="box" x="980" y="700" width="170" height="56"/>
+  <text class="text" x="1065" y="734">Graph Retriever</text>
+
+  <rect class="box" x="470" y="890" width="380" height="66"/>
+  <text class="text" x="660" y="931">Answer Generator and Audit Log</text>
+
+  <path class="line" d="M660 96 L660 130"/>
+  <path class="line" d="M660 200 L660 235"/>
+  <path class="line" d="M660 305 L660 340"/>
+  <path class="line" d="M660 410 L660 445"/>
+  <path class="line" d="M660 521 L660 555"/>
+
+  <path class="line" d="M575 620 C500 605, 300 600, 170 585"/>
+  <path class="line" d="M600 610 C560 600, 490 595, 430 585"/>
+  <path class="line" d="M720 610 C770 600, 840 595, 890 585"/>
+  <path class="line" d="M745 620 C860 600, 1030 595, 1150 585"/>
+
+  <path class="line" d="M170 651 C170 690, 215 695, 255 700"/>
+  <path class="line" d="M430 651 C430 690, 575 695, 660 700"/>
+  <path class="line" d="M890 651 C890 690, 760 695, 660 700"/>
+  <path class="line" d="M1150 651 C1150 690, 1095 695, 1065 700"/>
+
+  <path class="line" d="M255 756 C255 790, 530 795, 660 790"/>
+  <path class="line" d="M660 756 L660 790"/>
+  <path class="line" d="M1065 756 C1065 790, 790 795, 660 790"/>
+  <path class="line" d="M660 856 L660 890"/>
+</svg>

@@ -1,0 +1,11 @@
+fastapi==0.116.1
+uvicorn[standard]==0.35.0
+python-dotenv==1.1.1
+python-dateutil==2.9.0.post0
+paramiko<4
+sshtunnel==0.4.0
+SQLAlchemy==2.0.43
+psycopg2-binary==2.9.10
+openai>=1.30.0
+pandas>=2.2.0
+numpy>=1.26.0
