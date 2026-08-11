@@ -122,6 +122,19 @@ class RetrievalResult:
 
 
 @dataclass
+class ValidationResult:
+    stage: str
+    passed: bool
+    status: str
+    blocking_issues: list[str] = field(default_factory=list)
+    warnings: list[str] = field(default_factory=list)
+    notes: list[str] = field(default_factory=list)
+
+    def to_dict(self) -> dict[str, Any]:
+        return _json_safe(asdict(self))
+
+
+@dataclass
 class OrchestratorDecision:
     capability: str
     intent: str

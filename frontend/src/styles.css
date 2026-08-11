@@ -256,6 +256,76 @@ button {
   overflow: hidden;
 }
 
+.railCard--validation {
+  background:
+    linear-gradient(180deg, rgba(83, 104, 169, 0.07), rgba(255, 255, 255, 0.88)),
+    radial-gradient(circle at 100% 0%, rgba(13, 127, 135, 0.1), transparent 50%);
+  border-color: rgba(83, 104, 169, 0.22);
+}
+
+.pillStatus--validation {
+  background: rgba(83, 104, 169, 0.12);
+  color: var(--violet);
+}
+
+.validationRailNote {
+  font-size: 0.8rem;
+  margin-top: 8px;
+}
+
+.validationChipStack {
+  max-height: 420px;
+  overflow-y: auto;
+}
+
+.validationChip {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 3px;
+  width: 100%;
+  cursor: pointer;
+  text-align: left;
+  border-radius: 17px;
+  padding: 11px 13px;
+  background:
+    linear-gradient(180deg, rgba(83, 104, 169, 0.08), rgba(255, 255, 255, 0.9));
+  border: 1px solid rgba(83, 104, 169, 0.2);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.7);
+  transition: transform 150ms ease, box-shadow 150ms ease, border-color 150ms ease;
+}
+
+.validationChip:hover {
+  transform: translateY(-1px);
+  border-color: rgba(83, 104, 169, 0.42);
+  box-shadow: 0 10px 22px rgba(83, 104, 169, 0.14);
+}
+
+.validationChipLabel {
+  font-family: var(--mono);
+  font-size: 0.62rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--violet);
+}
+
+.validationChipQuery {
+  color: var(--ink-strong);
+  font-weight: 700;
+  font-size: 0.88rem;
+  line-height: 1.3;
+}
+
+.validationChipChecks {
+  margin-top: 2px;
+  color: var(--quiet);
+  font-family: var(--mono);
+  font-size: 0.6rem;
+  letter-spacing: 0.02em;
+  line-height: 1.4;
+}
+
 .panelTitleRow,
 .chatHeader,
 .traceHeader,
@@ -789,28 +859,6 @@ button {
   font-size: 0.9rem;
 }
 
-.traceTimeline {
-  display: flex;
-  flex-direction: column;
-  gap: 14px;
-  margin-top: 14px;
-}
-
-.traceStep {
-  display: grid;
-  grid-template-columns: 18px minmax(0, 1fr);
-  gap: 12px;
-}
-
-.traceDot {
-  width: 12px;
-  height: 12px;
-  margin-top: 7px;
-  border-radius: 999px;
-  background: linear-gradient(135deg, var(--teal), var(--amber));
-  box-shadow: 0 0 0 5px rgba(13, 127, 135, 0.08);
-}
-
 .traceStepHeading span {
   color: var(--quiet);
   font-size: 0.66rem;
@@ -861,6 +909,516 @@ button {
   margin: 8px 0 0;
   color: var(--muted);
   line-height: 1.55;
+}
+
+/* ── Agent Run Card in message bubbles ── */
+/* ── Session context banner ──────────────────────────────────────── */
+.sessionContextBanner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin: 10px 0 4px;
+  padding: 10px 14px;
+  border-radius: 12px;
+  background: rgba(13, 127, 135, 0.08);
+  border: 1px solid rgba(13, 127, 135, 0.22);
+  flex-wrap: wrap;
+}
+
+.sessionContextLeft {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.sessionContextDot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--teal);
+  flex-shrink: 0;
+  box-shadow: 0 0 0 3px rgba(13, 127, 135, 0.2);
+  animation: pulseGlow 2s ease-in-out infinite;
+}
+
+.sessionContextLabel {
+  margin: 0;
+  font-size: 0.68rem;
+  font-family: var(--mono);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+  color: var(--teal);
+}
+
+.sessionContextName {
+  display: block;
+  font-size: 0.92rem;
+  font-weight: 700;
+  color: var(--ink);
+  margin: 1px 0 0;
+}
+
+.sessionContextRight {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.sessionContextHint {
+  font-size: 0.74rem;
+  color: var(--muted);
+  font-family: var(--mono);
+}
+
+.sessionContextClear {
+  padding: 4px 10px;
+  border-radius: 999px;
+  border: 1px solid rgba(13, 127, 135, 0.3);
+  background: transparent;
+  color: var(--teal);
+  font-size: 0.72rem;
+  font-family: var(--mono);
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+  white-space: nowrap;
+}
+
+.sessionContextClear:hover {
+  background: rgba(13, 127, 135, 0.14);
+  color: var(--ink);
+}
+
+/* ─────────────────────────────────────────────────────────────────── */
+.agentRunCard {
+  margin: 10px 0 12px;
+  border-radius: 16px;
+  border: 1px solid rgba(13, 127, 135, 0.2);
+  background: linear-gradient(135deg, rgba(13, 127, 135, 0.06), rgba(83, 104, 169, 0.05));
+  overflow: hidden;
+}
+
+.agentRunHeader {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 14px;
+  flex-wrap: wrap;
+}
+
+.agentRunIdentity {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  min-width: 0;
+}
+
+.agentRunDot {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  margin-top: 4px;
+  border-radius: 999px;
+  background: linear-gradient(135deg, var(--teal), var(--amber));
+  animation: pulseGlow 2.2s ease-in-out infinite;
+  flex-shrink: 0;
+}
+
+@keyframes pulseGlow {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(13, 127, 135, 0.5); }
+  50% { box-shadow: 0 0 0 5px rgba(13, 127, 135, 0); }
+}
+
+.agentRunLabel {
+  margin: 0;
+  color: var(--teal);
+  font-family: var(--mono);
+  font-size: 0.62rem;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
+.agentRunName {
+  display: block;
+  margin-top: 2px;
+  color: var(--ink-strong);
+  font-size: 0.9rem;
+  font-weight: 800;
+  line-height: 1.25;
+}
+
+.agentRunCapability {
+  display: inline-block;
+  margin-top: 4px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: rgba(13, 127, 135, 0.1);
+  color: var(--teal);
+  font-family: var(--mono);
+  font-size: 0.62rem;
+  font-weight: 700;
+  text-transform: capitalize;
+  letter-spacing: 0.04em;
+}
+
+.agentRunValidations {
+  display: flex;
+  gap: 8px;
+  flex-shrink: 0;
+  flex-wrap: wrap;
+}
+
+.validationBadge {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 11px;
+  border-radius: 12px;
+  border: 1px solid transparent;
+  min-width: 100px;
+}
+
+.validationBadge--passed {
+  background: rgba(15, 139, 112, 0.1);
+  border-color: rgba(15, 139, 112, 0.2);
+}
+
+.validationBadge--warning {
+  background: rgba(207, 138, 46, 0.1);
+  border-color: rgba(207, 138, 46, 0.2);
+}
+
+.validationBadge--blocked {
+  background: rgba(215, 102, 69, 0.1);
+  border-color: rgba(215, 102, 69, 0.22);
+}
+
+.validationBadgeIcon {
+  font-size: 1rem;
+  font-weight: 900;
+  line-height: 1;
+  flex-shrink: 0;
+}
+
+.validationBadge--passed .validationBadgeIcon { color: var(--green); }
+.validationBadge--warning .validationBadgeIcon { color: var(--amber); }
+.validationBadge--blocked .validationBadgeIcon { color: var(--coral); }
+
+.validationBadgeStage {
+  margin: 0;
+  font-family: var(--mono);
+  font-size: 0.6rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--quiet);
+}
+
+.validationBadgeStatus {
+  display: block;
+  margin-top: 1px;
+  font-size: 0.8rem;
+  font-weight: 800;
+  text-transform: capitalize;
+}
+
+.validationBadge--passed .validationBadgeStatus { color: var(--green); }
+.validationBadge--warning .validationBadgeStatus { color: var(--amber); }
+.validationBadge--blocked .validationBadgeStatus { color: var(--coral); }
+
+.agentRunIssues {
+  display: grid;
+  gap: 4px;
+  padding: 0 14px 12px;
+}
+
+.agentRunIssue {
+  margin: 0;
+  padding: 6px 10px;
+  border-radius: 9px;
+  font-size: 0.78rem;
+  line-height: 1.4;
+}
+
+.agentRunIssue--blocking {
+  color: #7a1a1a;
+  background: rgba(215, 102, 69, 0.1);
+  border: 1px solid rgba(215, 102, 69, 0.2);
+}
+
+.agentRunIssue--warning {
+  color: #6a4a10;
+  background: rgba(207, 138, 46, 0.1);
+  border: 1px solid rgba(207, 138, 46, 0.18);
+}
+
+/* ── TracePanel validation section ── */
+.tracePanelCard--validation {
+  border-color: rgba(13, 127, 135, 0.22);
+  background:
+    linear-gradient(180deg, rgba(13, 127, 135, 0.05), rgba(255,255,255,0.82)),
+    var(--surface);
+}
+
+.statusBadge--blocked {
+  color: var(--coral);
+  background: rgba(215, 102, 69, 0.12);
+}
+
+.statusBadge--warning {
+  color: var(--amber);
+  background: rgba(207, 138, 46, 0.12);
+}
+
+.validationStageGrid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+  margin-top: 14px;
+}
+
+.validationStageCard {
+  padding: 12px;
+  border-radius: 16px;
+  border: 1px solid transparent;
+}
+
+.validationStageCard--passed {
+  background: rgba(15, 139, 112, 0.08);
+  border-color: rgba(15, 139, 112, 0.2);
+}
+
+.validationStageCard--warning {
+  background: rgba(207, 138, 46, 0.08);
+  border-color: rgba(207, 138, 46, 0.2);
+}
+
+.validationStageCard--blocked {
+  background: rgba(215, 102, 69, 0.08);
+  border-color: rgba(215, 102, 69, 0.22);
+}
+
+.validationStageTop {
+  display: flex;
+  align-items: flex-start;
+  gap: 9px;
+}
+
+.validationStageIcon {
+  font-size: 1.1rem;
+  font-weight: 900;
+  line-height: 1.2;
+  flex-shrink: 0;
+}
+
+.validationStageCard--passed .validationStageIcon { color: var(--green); }
+.validationStageCard--warning .validationStageIcon { color: var(--amber); }
+.validationStageCard--blocked .validationStageIcon { color: var(--coral); }
+
+.validationStageLabel {
+  margin: 0;
+  font-family: var(--mono);
+  font-size: 0.6rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--quiet);
+}
+
+.validationStageResult {
+  display: block;
+  margin-top: 2px;
+  font-size: 0.86rem;
+  font-weight: 800;
+}
+
+.validationStageResult--passed { color: var(--green); }
+.validationStageResult--warning { color: var(--amber); }
+.validationStageResult--blocked { color: var(--coral); }
+
+.validationStageIssues {
+  display: grid;
+  gap: 4px;
+  margin-top: 9px;
+}
+
+.validationStageIssue {
+  margin: 0;
+  padding: 5px 8px;
+  border-radius: 8px;
+  font-size: 0.74rem;
+  line-height: 1.4;
+}
+
+.validationStageIssue--blocking {
+  color: #7a1a1a;
+  background: rgba(215, 102, 69, 0.1);
+}
+
+.validationStageIssue--warning {
+  color: #6a4a10;
+  background: rgba(207, 138, 46, 0.1);
+}
+
+.validationStageNote {
+  margin: 8px 0 0;
+  color: var(--muted);
+  font-size: 0.76rem;
+  line-height: 1.45;
+}
+
+/* ── Trace panel timeline enhancements ── */
+.traceTimeline {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  margin-top: 16px;
+}
+
+.traceStep {
+  display: grid;
+  grid-template-columns: 28px minmax(0, 1fr);
+  gap: 0;
+  position: relative;
+}
+
+.traceStep:not(:last-child)::before {
+  content: "";
+  position: absolute;
+  left: 13px;
+  top: 22px;
+  bottom: -4px;
+  width: 2px;
+  background: linear-gradient(180deg, rgba(13, 127, 135, 0.22), rgba(13, 127, 135, 0.04));
+  z-index: 0;
+}
+
+.traceDot {
+  position: relative;
+  z-index: 1;
+  width: 12px;
+  height: 12px;
+  margin-top: 6px;
+  border-radius: 999px;
+  background: linear-gradient(135deg, var(--teal), var(--amber));
+  box-shadow: 0 0 0 4px rgba(13, 127, 135, 0.1);
+  flex-shrink: 0;
+}
+
+.traceStep--blocked .traceDot {
+  background: linear-gradient(135deg, var(--coral), #e08070);
+  box-shadow: 0 0 0 4px rgba(215, 102, 69, 0.12);
+}
+
+.traceStep--warning .traceDot,
+.traceStep--completed_with_warnings .traceDot {
+  background: linear-gradient(135deg, var(--amber), #e0b050);
+  box-shadow: 0 0 0 4px rgba(207, 138, 46, 0.12);
+}
+
+.traceStep--passed .traceDot {
+  background: linear-gradient(135deg, var(--green), #50c8a0);
+  box-shadow: 0 0 0 4px rgba(15, 139, 112, 0.12);
+}
+
+.traceStepBody {
+  padding: 0 0 18px 14px;
+  min-width: 0;
+}
+
+.traceStepHeading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.traceStepHeading strong {
+  color: var(--ink-strong);
+  font-size: 0.86rem;
+  font-weight: 800;
+  line-height: 1.3;
+}
+
+.traceStatusChip {
+  padding: 3px 8px;
+  border-radius: 999px;
+  font-family: var(--mono);
+  font-size: 0.6rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.traceStatusChip--completed {
+  color: var(--green);
+  background: rgba(15, 139, 112, 0.1);
+}
+
+.traceStatusChip--passed {
+  color: var(--teal);
+  background: rgba(13, 127, 135, 0.1);
+}
+
+.traceStatusChip--warning,
+.traceStatusChip--completed_with_warnings {
+  color: var(--amber);
+  background: rgba(207, 138, 46, 0.1);
+}
+
+.traceStatusChip--blocked {
+  color: var(--coral);
+  background: rgba(215, 102, 69, 0.1);
+}
+
+.traceStatusChip--skipped,
+.traceStatusChip--fallback {
+  color: var(--quiet);
+  background: rgba(16, 32, 54, 0.07);
+}
+
+.traceStatusChip--needs_review {
+  color: var(--amber);
+  background: rgba(207, 138, 46, 0.1);
+}
+
+.traceStepSummary {
+  margin: 5px 0 0;
+  font-size: 0.82rem;
+  line-height: 1.5;
+}
+
+.traceIssueList {
+  display: grid;
+  gap: 5px;
+  margin-top: 7px;
+}
+
+.traceIssue {
+  margin: 0;
+  padding: 7px 10px;
+  border-radius: 10px;
+  font-size: 0.78rem;
+  line-height: 1.4;
+}
+
+.traceIssue--blocking {
+  color: #7a1a1a;
+  background: rgba(215, 102, 69, 0.1);
+  border: 1px solid rgba(215, 102, 69, 0.2);
+}
+
+.traceIssue--warning {
+  color: #6a4a10;
+  background: rgba(207, 138, 46, 0.1);
+  border: 1px solid rgba(207, 138, 46, 0.2);
 }
 
 .srOnly {

@@ -24,6 +24,8 @@ export function TracePanel({ response }) {
   const context = response.context ?? {};
   const safety = response.safety ?? {};
   const auditEvent = response.audit_event ?? {};
+  const decisionValidation = response.decision_validation ?? null;
+  const evidenceValidation = response.evidence_validation ?? null;
 
   return (
     <aside className="tracePanelStack">
@@ -48,6 +50,68 @@ export function TracePanel({ response }) {
           <SourcePill value="Read-only" />
         </div>
       </section>
+
+      {(decisionValidation || evidenceValidation) ? (
+        <section className="tracePanelCard tracePanelCard--validation">
+          <div className="traceHeader">
+            <div>
+              <p className="eyebrow">Validation Agent</p>
+              <h3>Query Checks</h3>
+            </div>
+            <span className={`statusBadge ${
+              [decisionValidation, evidenceValidation].every(v => !v || v.passed)
+                ? "statusBadge--safe"
+                : [decisionValidation, evidenceValidation].some(v => v?.status === "blocked")
+                ? "statusBadge--blocked"
+                : "statusBadge--warning"
+            }`}>
+              {[decisionValidation, evidenceValidation].every(v => !v || v.passed)
+                ? "All passed"
+                : [decisionValidation, evidenceValidation].some(v => v?.status === "blocked")
+                ? "Blocked"
+                : "Warnings"}
+            </span>
+          </div>
+
+          <div className="validationStageGrid">
+            {[
+              { label: "Stage 1 — Decision", v: decisionValidation },
+              { label: "Stage 2 — Evidence", v: evidenceValidation },
+            ].map(({ label, v }) => v ? (
+              <div key={label} className={`validationStageCard validationStageCard--${v.status}`}>
+                <div className="validationStageTop">
+                  <span className="validationStageIcon">
+                    {v.passed ? "✓" : v.status === "warning" ? "⚠" : "✗"}
+                  </span>
+                  <div>
+                    <p className="validationStageLabel">{label}</p>
+                    <strong className={`validationStageResult validationStageResult--${v.status}`}>
+                      {v.status.charAt(0).toUpperCase() + v.status.slice(1)}
+                    </strong>
+                  </div>
+                </div>
+                {v.blocking_issues?.length ? (
+                  <div className="validationStageIssues">
+                    {v.blocking_issues.map((issue, i) => (
+                      <p key={i} className="validationStageIssue validationStageIssue--blocking">{issue}</p>
+                    ))}
+                  </div>
+                ) : null}
+                {v.warnings?.length ? (
+                  <div className="validationStageIssues">
+                    {v.warnings.slice(0, 2).map((w, i) => (
+                      <p key={i} className="validationStageIssue validationStageIssue--warning">{w}</p>
+                    ))}
+                  </div>
+                ) : null}
+                {v.notes?.length ? (
+                  <p className="validationStageNote">{v.notes[0]}</p>
+                ) : null}
+              </div>
+            ) : null)}
+          </div>
+        </section>
+      ) : null}
 
       <section className="tracePanelCard">
         <p className="eyebrow">Grounding</p>
@@ -91,25 +155,45 @@ export function TracePanel({ response }) {
         </div>
       </section>
 
-      {/*
       <section className="tracePanelCard">
-        <p className="eyebrow">Agent Timeline</p>
+        <div className="traceHeader">
+          <div>
+            <p className="eyebrow">Agent Pipeline</p>
+            <h3>Run Timeline</h3>
+          </div>
+          <span className="confidenceBadge">{(response.agent_trace || []).length} steps</span>
+        </div>
         <div className="traceTimeline">
-          {(response.agent_trace || []).map((step) => (
-            <div className="traceStep" key={step.agent}>
+          {(response.agent_trace || []).map((step, index) => (
+            <div className={`traceStep traceStep--${step.status?.replace(/[^a-z]/gi, "_") || "completed"}`} key={index}>
               <div className="traceDot" />
               <div className="traceStepBody">
                 <div className="traceStepHeading">
                   <strong>{step.agent}</strong>
-                  <span>{step.status}</span>
+                  <span className={`traceStatusChip traceStatusChip--${step.status?.replace(/[^a-z]/gi, "_") || "completed"}`}>
+                    {step.status || "completed"}
+                  </span>
                 </div>
-                <p className="mutedCopy">{step.summary}</p>
+                <p className="mutedCopy traceStepSummary">{step.summary}</p>
+                {step.blocking_issues?.length ? (
+                  <div className="traceIssueList">
+                    {step.blocking_issues.map((issue, i) => (
+                      <p key={i} className="traceIssue traceIssue--blocking">{issue}</p>
+                    ))}
+                  </div>
+                ) : null}
+                {step.warnings?.length ? (
+                  <div className="traceIssueList">
+                    {step.warnings.slice(0, 2).map((w, i) => (
+                      <p key={i} className="traceIssue traceIssue--warning">{w}</p>
+                    ))}
+                  </div>
+                ) : null}
               </div>
             </div>
           ))}
         </div>
       </section>
-      */}
 
       {sqlPlan ? (
         <section className="tracePanelCard">

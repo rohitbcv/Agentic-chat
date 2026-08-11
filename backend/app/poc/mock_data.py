@@ -29,6 +29,60 @@ SAMPLE_QUERIES: list[str] = [
 ]
 
 
+VALIDATION_SAMPLE_QUERIES: list[dict[str, str]] = [
+    {
+        "label": "Missing client → Stage 1 block",
+        "query": "What active inbox threads are there?",
+        "checks": "client_id required but absent → Decision blocked",
+    },
+    {
+        "label": "Write action → Stage 1 warning",
+        "query": "Send a reply to the guest for hotel Yash",
+        "checks": "blocked write-action pattern detected → Decision warning",
+    },
+    {
+        "label": "Unsupported capability → Stage 1 block",
+        "query": "What is the room pricing for Hotel Ramtin?",
+        "checks": "capability_state = not_supported → retrieval blocked",
+    },
+    {
+        "label": "No client for content → Stage 1 block",
+        "query": "What posts are scheduled this week?",
+        "checks": "content_schedule_lookup requires client_id → Decision blocked",
+    },
+    {
+        "label": "Clean path → both stages pass",
+        "query": "What active inbox threads are there for hotel Yash?",
+        "checks": "Stage 1 passed + Stage 2 evidence scope verified",
+    },
+    {
+        "label": "Access lookup → client scope check",
+        "query": "Who has access to Hotel d'Angleterre?",
+        "checks": "Stage 2 — client_id on SQL rows validated",
+    },
+    {
+        "label": "Required fields check",
+        "query": "Which posts are waiting for approval for Hotel d'Angleterre?",
+        "checks": "Stage 2 — post_id + current_status required fields verified",
+    },
+    {
+        "label": "Zero evidence → Stage 2 warning",
+        "query": "What events are coming up for hotel Yash?",
+        "checks": "Stage 2 — evidence count vs capability_state checked",
+    },
+    {
+        "label": "SQL + vector → full evidence validation",
+        "query": "How is the last TikTok post performing for client 7403?",
+        "checks": "Stage 2 — SQL rows + vector matches both scope-checked",
+    },
+    {
+        "label": "Vector table allow-list check",
+        "query": "Find media for Red Carnation Hotels Collection",
+        "checks": "Stage 2 — vector match tables within contract allow-list",
+    },
+]
+
+
 AGENT_CARDS: list[dict[str, str]] = [
     {
         "name": "Orchestrator Agent",

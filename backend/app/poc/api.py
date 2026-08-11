@@ -23,8 +23,10 @@ from ..services.intake import build_routing_payload, load_client_catalog
 from ..services.llm_answer import LLMAnswerResult, generate_llm_answer, llm_answer_status
 from ..services.orchestrator import build_orchestrator_decision
 from ..services.safety import SafetyReview, build_audit_event, evaluate_answer_safety
-from ..services.specialist_agents import run_specialist_agent
-from .mock_data import AGENT_CARDS, MOCK_CLIENTS, SAMPLE_QUERIES
+from ..services.retrievers import SQL_TEMPLATE_CATALOG
+from ..services.specialist_agents import SPECIALIST_AGENT_CONTRACTS, run_specialist_agent, _fallback_contract
+from ..services.validation import validate_decision, validate_evidence
+from .mock_data import AGENT_CARDS, MOCK_CLIENTS, SAMPLE_QUERIES, VALIDATION_SAMPLE_QUERIES
 
 router = APIRouter(prefix="/api/agent-poc", tags=["agent-poc"])
 
@@ -404,6 +406,26 @@ def _build_safety_trace(safety: SafetyReview) -> dict[str, Any]:
         "summary": " ".join(safety.notes[:3]),
         "read_only": safety.read_only,
         "capability_state": safety.capability_state,
+    }
+
+
+def _build_validation_trace(validation: Any) -> dict[str, Any]:
+    stage_label = "Decision" if validation.stage == "decision" else "Evidence"
+    status = validation.status
+    summary_parts = [f"Validation Agent — Stage {1 if validation.stage == 'decision' else 2} ({stage_label}) completed with status '{status}'."]
+    if validation.blocking_issues:
+        summary_parts.append(f"Blocking: {'; '.join(validation.blocking_issues[:2])}")
+    elif validation.warnings:
+        summary_parts.append(f"Warnings: {'; '.join(validation.warnings[:2])}")
+    return {
+        "agent": f"Validation Agent — {stage_label} Validation",
+        "status": status,
+        "summary": " ".join(summary_parts),
+        "stage": validation.stage,
+        "passed": validation.passed,
+        "blocking_issues": validation.blocking_issues,
+        "warnings": validation.warnings,
+        "notes": validation.notes,
     }
 
 
@@ -1030,6 +1052,7 @@ def get_agent_poc_config() -> dict[str, Any]:
         "agents": AGENT_CARDS,
         "clients": _config_clients(),
         "sample_queries": SAMPLE_QUERIES,
+        "validation_sample_queries": VALIDATION_SAMPLE_QUERIES,
         "backend_notes": [
             "Phase 0 and Phase 1 docs lock the read-only scope and exposure rules.",
             "Phase 2 intake resolves intent, entities, and scoped client access before retrieval.",
@@ -1127,11 +1150,70 @@ def run_agent_poc_chat(payload: PocChatRequest) -> dict[str, Any]:
             "orchestrator": decision.to_dict(),
         }
 
+    # Stage 1 — Decision Validation
+    _contract = SPECIALIST_AGENT_CONTRACTS.get(decision.agent_name, _fallback_contract(decision.agent_name))
+    decision_validation = validate_decision(
+        routing_payload,
+        decision,
+        allowed_tables=_contract.allowed_tables,
+        allowed_retriever_modes=_contract.allowed_retriever_modes,
+        known_template_keys=set(SQL_TEMPLATE_CATALOG.keys()),
+        agent_name=_contract.name,
+    )
+    trace.append(_build_validation_trace(decision_validation))
+
+    if not decision_validation.passed:
+        context = merge_retrieval_context(routing_payload, decision, None, None)
+        safety = evaluate_answer_safety(
+            "; ".join(decision_validation.blocking_issues) or "Validation blocked this request.",
+            routing_payload,
+            decision,
+            context,
+        )
+        follow_up_questions = build_follow_up_questions(
+            routing_payload, decision, context, None, None,
+            "; ".join(decision_validation.blocking_issues),
+            chat_history=chat_history,
+        )
+        trace.extend([_build_context_trace(context), _build_safety_trace(safety)])
+        return {
+            "mode": "validation_blocked",
+            "query": query,
+            "client_id": routing_payload.entities.client_id,
+            "capability_state": decision.capability_state,
+            "route": _route_payload(decision),
+            "answer": "This request could not proceed because the decision did not pass validation. " + "; ".join(decision_validation.blocking_issues),
+            "follow_up_questions": follow_up_questions,
+            "agent_trace": trace,
+            "sql_plan": None,
+            "knowledge_plan": None,
+            "sources": [],
+            "source_trace": [],
+            "context": context.to_dict(),
+            "safety": safety.to_dict(),
+            "audit_event": build_audit_event(query, routing_payload, decision, context, safety),
+            "intake": routing_payload.to_dict(),
+            "orchestrator": decision.to_dict(),
+            "decision_validation": decision_validation.to_dict(),
+            "evidence_validation": None,
+        }
+
     agent_run = run_specialist_agent(routing_payload, decision)
     sql_result = agent_run.sql_result
     vector_result = agent_run.vector_result
     source_traces = [trace_item.to_dict() for trace_item in agent_run.source_traces]
     trace.extend(agent_run.trace_steps)
+
+    # Stage 2 — Evidence Validation
+    evidence_validation = validate_evidence(
+        routing_payload,
+        decision,
+        sql_result,
+        vector_result,
+        allowed_tables=_contract.allowed_tables,
+    )
+    trace.append(_build_validation_trace(evidence_validation))
+
     context = merge_retrieval_context(routing_payload, decision, sql_result, vector_result)
     trace.append(_build_context_trace(context))
 
@@ -1192,4 +1274,6 @@ def run_agent_poc_chat(payload: PocChatRequest) -> dict[str, Any]:
         "audit_event": build_audit_event(query, routing_payload, decision, context, safety),
         "intake": routing_payload.to_dict(),
         "orchestrator": decision.to_dict(),
+        "decision_validation": decision_validation.to_dict(),
+        "evidence_validation": evidence_validation.to_dict(),
     }

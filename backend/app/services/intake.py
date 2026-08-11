@@ -194,13 +194,9 @@ def load_client_catalog() -> list[dict[str, Any]]:
 
 
 def _resolve_client_from_query(normalized_query: str, explicit_client_id: int | None, catalog: list[dict[str, Any]]) -> tuple[int | None, str | None, str | None]:
-    if explicit_client_id is not None:
-        for client in catalog:
-            if int(client["id"]) == int(explicit_client_id):
-                return int(client["id"]), str(client["name"]), client.get("city")
-        return explicit_client_id, None, None
-
-    client_id_match = re.search(r"\bclient\s+(\d+)\b", normalized_query)
+    # Priority 1: explicit numeric client ID mentioned in the query itself
+    # (e.g. "client 7403", "client_id=7403").  This always wins over everything.
+    client_id_match = re.search(r"\bclient(?:id|\s+id)?\s+(\d+)\b", normalized_query)
     if client_id_match:
         resolved_id = int(client_id_match.group(1))
         for client in catalog:
@@ -208,46 +204,56 @@ def _resolve_client_from_query(normalized_query: str, explicit_client_id: int | 
                 return resolved_id, str(client["name"]), client.get("city")
         return resolved_id, None, None
 
+    # Priority 2: exact name match anywhere in the query (longest first to avoid
+    # a short name swallowing a longer one, e.g. "Inn" vs "The Inn at Somewhere").
     for client in sorted(catalog, key=lambda item: len(str(item["name"])), reverse=True):
         normalized_name = normalize_text(str(client["name"]))
         if normalized_name and normalized_name in normalized_query:
             return int(client["id"]), str(client["name"]), client.get("city")
 
+    # Priority 3: fuzzy token overlap — distinctive tokens that unambiguously
+    # identify one client.
     query_tokens = _name_tokens(normalized_query, drop_generic=True)
-    if not query_tokens:
-        return None, None, None
+    if query_tokens:
+        candidates: list[tuple[float, int, dict[str, Any]]] = []
+        for client in catalog:
+            raw_name = str(client["name"])
+            name_tokens = _name_tokens(raw_name, drop_generic=True)
+            if not name_tokens:
+                continue
+            overlap = name_tokens & query_tokens
+            if not overlap:
+                continue
 
-    candidates: list[tuple[float, int, dict[str, Any]]] = []
-    for client in catalog:
-        raw_name = str(client["name"])
-        name_tokens = _name_tokens(raw_name, drop_generic=True)
-        if not name_tokens:
-            continue
-        overlap = name_tokens & query_tokens
-        if not overlap:
-            continue
+            has_multi_token_alias = len(overlap) >= 2
+            has_unique_name_token = len(name_tokens) == 1 and len(next(iter(overlap))) >= 4
+            has_distinctive_token = any(len(token) >= 5 for token in overlap)
+            if not (has_multi_token_alias or has_unique_name_token or has_distinctive_token):
+                continue
 
-        has_multi_token_alias = len(overlap) >= 2
-        has_unique_name_token = len(name_tokens) == 1 and len(next(iter(overlap))) >= 4
-        has_distinctive_token = any(len(token) >= 5 for token in overlap)
-        if not (has_multi_token_alias or has_unique_name_token or has_distinctive_token):
-            continue
+            coverage = len(overlap) / max(len(name_tokens), 1)
+            query_coverage = len(overlap) / max(len(query_tokens), 1)
+            score = (coverage * 0.7) + (query_coverage * 0.3)
+            candidates.append((score, len(overlap), client))
 
-        coverage = len(overlap) / max(len(name_tokens), 1)
-        query_coverage = len(overlap) / max(len(query_tokens), 1)
-        score = (coverage * 0.7) + (query_coverage * 0.3)
-        candidates.append((score, len(overlap), client))
+        if candidates:
+            candidates.sort(key=lambda item: (item[0], item[1], len(str(item[2]["name"]))), reverse=True)
+            best_score, best_overlap, best_client = candidates[0]
+            tied = [
+                c
+                for s, o, c in candidates[1:]
+                if abs(s - best_score) < 0.08 and o == best_overlap
+            ]
+            if not tied:
+                return int(best_client["id"]), str(best_client["name"]), best_client.get("city")
 
-    if candidates:
-        candidates.sort(key=lambda item: (item[0], item[1], len(str(item[2]["name"]))), reverse=True)
-        best_score, best_overlap, best_client = candidates[0]
-        tied = [
-            client
-            for score, overlap, client in candidates[1:]
-            if abs(score - best_score) < 0.08 and overlap == best_overlap
-        ]
-        if not tied:
-            return int(best_client["id"]), str(best_client["name"]), best_client.get("city")
+    # Priority 4: session/dropdown client passed from the frontend — only used
+    # when the query itself does not name any client.
+    if explicit_client_id is not None:
+        for client in catalog:
+            if int(client["id"]) == int(explicit_client_id):
+                return int(client["id"]), str(client["name"]), client.get("city")
+        return explicit_client_id, None, None
 
     return None, None, None
 

@@ -3,9 +3,10 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass, field
 from typing import Any
 
-from ..contracts import OrchestratorDecision, RetrievalResult, RoutingPayload, SourceTrace
+from ..contracts import OrchestratorDecision, RetrievalResult, RoutingPayload, SourceTrace, ValidationResult
 from ..read_only import agent_read_only_policy
 from .retrievers import execute_sql_capability, execute_vector_capability
+from .validation import validate_table_policy
 
 
 @dataclass(frozen=True)
@@ -72,6 +73,7 @@ class SpecialistAgentRun:
     source_traces: list[SourceTrace] = field(default_factory=list)
     trace_steps: list[dict[str, Any]] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
+    validation_result: ValidationResult | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -87,6 +89,7 @@ class SpecialistAgentRun:
             "source_traces": [trace.to_dict() for trace in self.source_traces],
             "trace_steps": self.trace_steps,
             "warnings": self.warnings,
+            "validation_result": self.validation_result.to_dict() if self.validation_result else None,
         }
 
 
@@ -401,13 +404,8 @@ def _retriever_trace(result: RetrievalResult, agent_name: str) -> dict[str, Any]
 
 
 def _table_policy_warnings(decision: OrchestratorDecision, contract: SpecialistAgentContract) -> list[str]:
-    allowed = set(contract.allowed_tables)
-    if not allowed:
-        return []
-    extra_tables = sorted({table for table in decision.tables if table not in allowed})
-    if not extra_tables:
-        return []
-    return [f"Route requested table(s) outside {contract.name} allow-list: {', '.join(extra_tables)}"]
+    """Thin wrapper — core logic now lives in validation.validate_table_policy."""
+    return validate_table_policy(decision.tables, contract.allowed_tables, contract.name)
 
 
 def run_specialist_agent(payload: RoutingPayload, decision: OrchestratorDecision) -> SpecialistAgentRun:
