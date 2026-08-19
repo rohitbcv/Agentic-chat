@@ -527,6 +527,16 @@ def seed_reference(conn: sqlite3.Connection) -> None:
             (508, "Potsdam", 8, 5),
             (509, "Bihar", 9, 3),
             (510, "Hamburg", 10, 5),
+            (511, "New Delhi", 11, 3),
+            (512, "Dubai", 12, 6),
+            (513, "Hong Kong", 13, 7),
+            (514, "Florence", 14, 8),
+            (515, "Maldives", 15, 9),
+            (516, "Singapore", 16, 10),
+            (517, "Zurich", 17, 1),
+            (518, "Venice", 18, 8),
+            (519, "Paris", 19, 11),
+            (520, "Barcelona", 20, 12),
         ],
     )
 
@@ -547,6 +557,17 @@ CLIENTS = [
     (1013, "HotelAnand", 311, 503, "Jaipur", "Local hotel with booking questions."),
     (1014, "SoHo Chicago", 312, 502, "Chicago", "Social dining and events venue."),
     (1015, "Lemon Tree Jaipur", 313, 503, "Jaipur", "Mid-market hotel for family and business travelers."),
+    # 10 new international clients
+    (1016, "The Oberoi New Delhi", 314, 511, "New Delhi", "Iconic luxury hotel in the heart of India's capital."),
+    (1017, "Atlantis The Palm", 315, 512, "Dubai", "World-famous resort destination on Palm Jumeirah."),
+    (1018, "The Peninsula Hong Kong", 316, 513, "Hong Kong", "Heritage luxury hotel with legendary service since 1928."),
+    (1019, "Four Seasons Florence", 317, 514, "Florence", "Renaissance palazzo hotel with garden and spa."),
+    (1020, "Waldorf Astoria Maldives", 318, 515, "Maldives", "Overwater villa retreat in the Indian Ocean."),
+    (1021, "Raffles Singapore", 319, 516, "Singapore", "Colonial landmark hotel with iconic long-bar experience."),
+    (1022, "Hotel Baur au Lac", 320, 517, "Zurich", "Private-park lakeside hotel in the heart of Zurich."),
+    (1023, "Belmond Hotel Cipriani", 321, 518, "Venice", "Legendary island hotel on Giudecca with garden and pool."),
+    (1024, "The Ritz Paris", 322, 519, "Paris", "Palace hotel on Place Vendome with Michelin-starred dining."),
+    (1025, "Mandarin Oriental Barcelona", 323, 520, "Barcelona", "Contemporary luxury hotel on Passeig de Gracia."),
 ]
 
 CLIENT_PROFILES: dict[int, dict[str, Any]] = {
@@ -624,6 +645,126 @@ CLIENT_PROFILES: dict[int, dict[str, Any]] = {
         ],
         "audiences": ["snow-season travelers", "families", "friend groups", "mountain leisure guests"],
     },
+    1016: {
+        "amenities": ["pool", "spa", "concierge", "fine dining", "airport transfer", "wifi", "butler service"],
+        "highlights": ["New Delhi heritage setting", "butler service", "rooftop fine dining"],
+        "policies": {"check_in_time": "14:00", "check_out_time": "12:00", "smoking_policy": "designated areas only", "pets": "not allowed"},
+        "faqs": [
+            ("Airport transfer", "Complimentary airport transfers available for suite guests."),
+            ("Butler service", "Round-the-clock butler service is included for all rooms."),
+            ("Spa", "The Oberoi Spa offers Ayurvedic and international wellness treatments."),
+            ("Dining", "Threesixtyone° restaurant offers all-day dining with live cooking stations."),
+        ],
+        "audiences": ["luxury leisure travelers", "business delegates", "honeymoon couples", "diplomatic guests"],
+    },
+    1017: {
+        "amenities": ["water park", "private beach", "aquarium", "multiple pools", "kids club", "fine dining", "spa", "casino"],
+        "highlights": ["Palm Jumeirah location", "world's largest waterpark", "celebrity chef restaurants"],
+        "policies": {"check_in_time": "15:00", "check_out_time": "12:00", "waterpark": "aquaventure access included for all guests"},
+        "faqs": [
+            ("Waterpark", "Aquaventure Waterpark access is included for all hotel guests."),
+            ("Aquarium", "The Lost Chambers Aquarium is open daily and accessible to hotel guests."),
+            ("Beach", "Private beach on the Palm is exclusively for hotel guests."),
+            ("Dining", "Over 40 restaurants and bars are available across the resort."),
+        ],
+        "audiences": ["families", "luxury resort guests", "adventure travelers", "international tourists"],
+    },
+    1018: {
+        "amenities": ["rooftop pool", "spa", "fleet of Rolls-Royce vehicles", "concierge", "fine dining", "shopping arcade"],
+        "highlights": ["Victoria Harbour views", "legendary Peninsula service", "Rolls-Royce fleet"],
+        "policies": {"check_in_time": "15:00", "check_out_time": "12:00", "dress_code": "smart casual in restaurants"},
+        "faqs": [
+            ("Rolls-Royce fleet", "Complimentary Rolls-Royce transfers to select locations are available."),
+            ("High tea", "Afternoon tea at The Lobby is an iconic Peninsula tradition."),
+            ("Spa", "The Peninsula Spa offers signature treatments and harbour views."),
+            ("Harbour view", "Superior harbour-view rooms face Victoria Harbour directly."),
+        ],
+        "audiences": ["luxury travelers", "business executives", "couples", "heritage hotel enthusiasts"],
+    },
+    1019: {
+        "amenities": ["garden", "spa", "pool", "Michelin-starred restaurant", "concierge", "city tours", "wine cellar"],
+        "highlights": ["Renaissance palazzo setting", "garden and pool", "Florentine art access"],
+        "policies": {"check_in_time": "15:00", "check_out_time": "12:00", "dress_code": "smart casual for Il Palagio restaurant"},
+        "faqs": [
+            ("Garden", "The 11-acre garden is available exclusively to hotel guests."),
+            ("Il Palagio", "Il Palagio restaurant holds a Michelin star and is open for dinner."),
+            ("Art access", "Concierge can arrange private art museum access and guided tours."),
+            ("Spa", "The Spa at Four Seasons offers Renaissance-inspired treatments."),
+        ],
+        "audiences": ["luxury leisure travelers", "honeymoon couples", "art and culture enthusiasts", "food and wine travelers"],
+    },
+    1020: {
+        "amenities": ["overwater villas", "private pool per villa", "dive centre", "spa", "butler service", "water sports"],
+        "highlights": ["overwater villa experience", "Indian Ocean location", "house reef snorkelling"],
+        "policies": {"check_in_time": "14:00", "check_out_time": "11:00", "transfer": "seaplane or speedboat from Male"},
+        "faqs": [
+            ("Seaplane transfer", "Seaplane transfers from Male operate during daylight hours only."),
+            ("Snorkelling", "The house reef is accessible directly from the water villas."),
+            ("Butler", "A dedicated butler is assigned to each villa for the full stay."),
+            ("Dive centre", "PADI-certified dive centre offers courses and guided dive trips."),
+        ],
+        "audiences": ["luxury honeymoon couples", "underwater experience seekers", "wellness retreaters", "ultra-premium leisure guests"],
+    },
+    1021: {
+        "amenities": ["long bar", "pool", "spa", "butler service", "colonial architecture", "multiple restaurants"],
+        "highlights": ["birthplace of the Singapore Sling", "colonial landmark", "orchid garden"],
+        "policies": {"check_in_time": "15:00", "check_out_time": "12:00", "dress_code": "smart casual in restaurants"},
+        "faqs": [
+            ("Singapore Sling", "The original Singapore Sling cocktail was invented at the Long Bar."),
+            ("Colonial suites", "All rooms are suites, preserving the colonial heritage layout."),
+            ("Tiffin Room", "Tiffin Room serves Indian and colonial-era cuisine."),
+            ("Pool", "The swimming pool is set in a tropical garden courtyard."),
+        ],
+        "audiences": ["heritage hotel enthusiasts", "luxury leisure travelers", "food and culture guests", "honeymooners"],
+    },
+    1022: {
+        "amenities": ["private park", "lake views", "fine dining", "spa", "concierge", "boat service", "business centre"],
+        "highlights": ["private park on Lake Zurich", "Swiss discretion", "Michelin-starred Pavillon restaurant"],
+        "policies": {"check_in_time": "15:00", "check_out_time": "12:00", "dress_code": "jacket required for Pavillon dinner"},
+        "faqs": [
+            ("Lake access", "Hotel guests have access to the private park with lake views."),
+            ("Pavillon restaurant", "Pavillon is one of Zurich's top fine-dining destinations."),
+            ("Boat service", "Private boat transfers on Lake Zurich can be arranged."),
+            ("Business centre", "A fully equipped business centre is available 24 hours."),
+        ],
+        "audiences": ["luxury business travelers", "fine dining guests", "private leisure travelers", "European touring guests"],
+    },
+    1023: {
+        "amenities": ["island garden", "pool", "spa", "private boat transfers", "fine dining", "tennis courts"],
+        "highlights": ["Giudecca island setting", "Grand Canal views", "historic Olympic swimming pool"],
+        "policies": {"check_in_time": "15:00", "check_out_time": "12:00", "access": "private boat from San Marco in 5 minutes"},
+        "faqs": [
+            ("Boat access", "Complimentary private boat service runs between hotel and San Marco."),
+            ("Pool", "The Casanova Swimming Pool is one of Venice's few outdoor pools."),
+            ("Garden", "The hotel garden is a rare tranquil space in the heart of Venice."),
+            ("Dining", "Cip's Club restaurant serves seasonal Venetian cuisine on the waterfront."),
+        ],
+        "audiences": ["luxury leisure travelers", "honeymooners", "art biennale visitors", "food and culture enthusiasts"],
+    },
+    1024: {
+        "amenities": ["Michelin-starred dining", "spa", "pool", "concierge", "personal shopper", "butler service", "wine cellar"],
+        "highlights": ["Place Vendome location", "L'Espadon restaurant", "Bar Hemingway"],
+        "policies": {"check_in_time": "15:00", "check_out_time": "12:00", "dress_code": "jacket and tie for L'Espadon dinner"},
+        "faqs": [
+            ("Bar Hemingway", "Bar Hemingway is a legendary Parisian institution open to hotel guests and visitors."),
+            ("L'Espadon", "L'Espadon holds two Michelin stars and serves classic French haute cuisine."),
+            ("Shopping", "Personal shopping services and concierge for Place Vendome jewellery houses available."),
+            ("Spa", "The Ritz Club Spa offers signature anti-ageing treatments and indoor pool."),
+        ],
+        "audiences": ["ultra-luxury travelers", "fashion and art guests", "honeymooners", "Parisian culture enthusiasts"],
+    },
+    1025: {
+        "amenities": ["rooftop pool", "spa", "concierge", "fine dining", "city views", "art collection", "personal trainer"],
+        "highlights": ["Passeig de Gracia location", "contemporary art collection", "rooftop terrace"],
+        "policies": {"check_in_time": "15:00", "check_out_time": "12:00", "rooftop": "rooftop pool open May to October"},
+        "faqs": [
+            ("Rooftop pool", "The rooftop pool and terrace offer views of the Barcelona skyline."),
+            ("Art collection", "Over 1,500 pieces of Catalan contemporary art are displayed throughout the hotel."),
+            ("Moments restaurant", "Moments restaurant holds two Michelin stars and showcases Catalan cuisine."),
+            ("Spa", "The Moments Spa offers treatments inspired by Catalan botanicals."),
+        ],
+        "audiences": ["luxury leisure travelers", "art and design enthusiasts", "culinary guests", "honeymooners"],
+    },
 }
 
 MARKETING_SETTINGS: dict[int, dict[str, Any]] = {
@@ -642,6 +783,16 @@ MARKETING_SETTINGS: dict[int, dict[str, Any]] = {
     1013: {"property_type": "boutique city hotel", "conversion": 0.066, "average_default_rate": 85, "average_length_of_stay": 1.8},
     1014: {"property_type": "business city hotel", "conversion": 0.091, "average_default_rate": 225, "average_length_of_stay": 1.7},
     1015: {"property_type": "mid-market city hotel", "conversion": 0.071, "average_default_rate": 90, "average_length_of_stay": 2.0},
+    1016: {"property_type": "luxury heritage hotel", "conversion": 0.131, "average_default_rate": 780, "average_length_of_stay": 3.0},
+    1017: {"property_type": "resort and entertainment hotel", "conversion": 0.119, "average_default_rate": 650, "average_length_of_stay": 4.2},
+    1018: {"property_type": "luxury heritage hotel", "conversion": 0.138, "average_default_rate": 920, "average_length_of_stay": 2.8},
+    1019: {"property_type": "luxury palazzo hotel", "conversion": 0.127, "average_default_rate": 860, "average_length_of_stay": 3.1},
+    1020: {"property_type": "ultra-luxury overwater resort", "conversion": 0.143, "average_default_rate": 1850, "average_length_of_stay": 5.5},
+    1021: {"property_type": "luxury heritage hotel", "conversion": 0.124, "average_default_rate": 720, "average_length_of_stay": 2.9},
+    1022: {"property_type": "luxury lakeside hotel", "conversion": 0.133, "average_default_rate": 810, "average_length_of_stay": 2.5},
+    1023: {"property_type": "luxury island hotel", "conversion": 0.129, "average_default_rate": 1100, "average_length_of_stay": 3.7},
+    1024: {"property_type": "palace hotel", "conversion": 0.148, "average_default_rate": 1650, "average_length_of_stay": 3.3},
+    1025: {"property_type": "luxury design hotel", "conversion": 0.126, "average_default_rate": 750, "average_length_of_stay": 2.7},
 }
 
 
@@ -887,6 +1038,30 @@ def seed_clients(conn: sqlite3.Connection) -> None:
 
 
 def seed_content_media_analytics(conn: sqlite3.Connection) -> None:
+    THEMES = [
+        "Local Experiences",
+        "Dining Moments",
+        "Guest Comfort",
+        "Seasonal Highlights",
+        "Campaign Stories",
+    ]
+    POST_TEMPLATES = [
+        "{name} shares {theme_lower} in {city}, inviting guests to discover a thoughtful stay.",
+        "Discover {theme_lower} at {name} in {city} — crafted for guests who appreciate the details.",
+        "{name} in {city} invites you to experience {theme_lower} like never before.",
+        "From {city} with care: {name} presents {theme_lower} for a truly memorable stay.",
+        "Guests at {name} in {city} share their favourite {theme_lower} moments.",
+        "{name} — where {theme_lower} meets local {city} character.",
+        "Step inside {name}: {theme_lower} in {city} told through the eyes of our guests.",
+        "This season at {name}, {theme_lower} takes on a new meaning in {city}.",
+    ]
+    MEDIA_THEMES = [
+        "exterior", "dining", "room comfort", "local experience",
+        "team service", "event atmosphere", "wellness", "family stay",
+        "pool area", "lobby", "rooftop", "garden", "bar lounge", "spa",
+    ]
+    NETWORKS = [7, 1, 6, 9]  # instagram_graph, facebook, linkedin, tiktok
+
     topic_rows = []
     post_rows = []
     approval_rows = []
@@ -899,156 +1074,108 @@ def seed_content_media_analytics(conn: sqlite3.Connection) -> None:
     approval_id = 1
     media_id = 1
     analytics_id = 1
-    networks = [1, 7, 6, 9]
-    statuses = [6, 1, 4, 7]
+
     for client_index, (client_id, name, _, _, city, _) in enumerate(CLIENTS):
         posted_post_ids: list[int] = []
-        for theme in ["Local experiences", "Dining moments", "Guest comfort"]:
-            topic_rows.append((topic_id, client_id, 201, None, theme, None, dt(-20), dt(-1), None, None))
-            for offset in range(4):
-                network_id = networks[(client_index + offset) % len(networks)]
-                status_id = statuses[(client_index + offset) % len(statuses)]
-                scheduled_at = dt(-3, offset) if status_id == 7 else dt(offset, offset)
-                ref = f"{client_id}_{post_id}_ref" if status_id == 7 else None
-                post_text = f"{name} shares {theme.lower()} in {city}, inviting guests to discover a thoughtful stay."
-                post_rows.append(
-                    (
-                        post_id,
-                        201,
-                        topic_id,
-                        network_id,
-                        status_id,
-                        scheduled_at,
-                        post_text,
-                        dt(-10),
-                        dt(-1),
-                        None,
-                        ref,
-                        None,
-                        0.86,
-                        1,
-                        "On brand",
-                        1,
-                        0,
-                    )
-                )
+        base_topic_id = topic_id
+
+        # 5 topics per client
+        for theme in THEMES:
+            topic_rows.append((topic_id, client_id, 201, None, theme, None, dt(-90), dt(-1), None, None))
+            topic_id += 1
+
+        # Posts over 90 days: every 3 days, 2 networks per slot → ~64 posts per client
+        post_slot = 0
+        for day_offset in range(-90, 6, 3):
+            for sn_idx, network_id in enumerate(NETWORKS[:2]):
+                theme_idx = (post_slot + sn_idx + client_index) % len(THEMES)
+                current_topic_id = base_topic_id + theme_idx
+                theme = THEMES[theme_idx]
+                template = POST_TEMPLATES[(post_slot + sn_idx + client_index) % len(POST_TEMPLATES)]
+                post_text = template.format(name=name, theme_lower=theme.lower(), city=city)
+
+                if day_offset < -1:
+                    status_id = 7   # posted
+                    ref = f"{client_id}_{post_id}_ref"
+                elif day_offset <= 0:
+                    status_id = 6   # scheduled
+                    ref = None
+                else:
+                    status_id = 1   # draft
+                    ref = None
+
+                scheduled_at = dt(day_offset, sn_idx)
+                brand_score = round(0.80 + (client_index % 5) * 0.03, 2)
+                post_rows.append((
+                    post_id, 201, current_topic_id, network_id, status_id,
+                    scheduled_at, post_text,
+                    dt(day_offset - 2), dt(day_offset - 1),
+                    None, ref, None, brand_score, 1, "On brand", 1, 0,
+                ))
+
                 if status_id in {1, 4, 8, 9}:
-                    approval_rows.append((approval_id, 202, post_id, status_id, "Looks good, awaiting final review." if status_id == 4 else None, dt(-1), None, None, 1))
+                    approval_rows.append((
+                        approval_id, 202, post_id, status_id,
+                        "Awaiting review." if status_id == 4 else None,
+                        dt(day_offset - 1), None, None, 1,
+                    ))
                     approval_id += 1
+
                 if ref:
                     posted_post_ids.append(post_id)
-                    analytics_rows.append(
-                        (
-                            analytics_id,
-                            network_id,
-                            str(client_id),
-                            ref,
-                            json.dumps(
-                                {
-                                    "id": ref,
-                                    "likes": {"count": 12 + client_index, "totalCount": 12 + client_index},
-                                    "comments": {"count": 3 + offset, "total_count": 3 + offset},
-                                    "reactions": {"totalCount": 8 + offset},
-                                    "shares": {"count": offset},
-                                    "permalink_url": f"https://example.test/{ref}",
-                                    "created_time": scheduled_at,
-                                }
-                            ),
-                            0,
-                            dt(-1),
-                            dt(-1),
-                            scheduled_at,
-                            None,
-                        )
-                    )
-                    analytics_id += 1
-                post_id += 1
-            topic_id += 1
-        topic_rows.append((topic_id, client_id, 201, None, "Performance highlights", None, dt(-12), dt(-1), None, None))
-        for network_offset, network_id in enumerate(networks):
-            scheduled_at = dt(-1 - network_offset, network_offset)
-            ref = f"{client_id}_{post_id}_evergreen_ref"
-            network_label = {1: "Facebook", 7: "Instagram", 6: "LinkedIn", 9: "TikTok"}[network_id]
-            post_text = f"{name} shares a {network_label} highlight from {city}, featuring guest experience, local moments and service details."
-            post_rows.append(
-                (
-                    post_id,
-                    201,
-                    topic_id,
-                    network_id,
-                    7,
-                    scheduled_at,
-                    post_text,
-                    dt(-10),
-                    dt(-1),
-                    None,
-                    ref,
-                    None,
-                    0.9,
-                    1,
-                    "On brand",
-                    1,
-                    0,
-                )
-            )
-            posted_post_ids.append(post_id)
-            analytics_rows.append(
-                (
-                    analytics_id,
-                    network_id,
-                    str(client_id),
-                    ref,
-                    json.dumps(
-                        {
+                    week_num = abs(day_offset) // 7
+                    base_likes = 15 + client_index + week_num + (post_slot % 10)
+                    base_reach = 400 + (client_index * 20) + (week_num * 15) + (post_slot * 5)
+                    analytics_rows.append((
+                        analytics_id, network_id, str(client_id), ref,
+                        json.dumps({
                             "id": ref,
-                            "likes": {"count": 30 + client_index + network_offset, "totalCount": 30 + client_index + network_offset},
-                            "comments": {"count": 5 + network_offset, "total_count": 5 + network_offset},
-                            "reactions": {"totalCount": 12 + client_index + network_offset},
-                            "shares": {"count": 2 + network_offset},
-                            "reach": 500 + (client_index * 25) + (network_offset * 30),
-                            "impressions": 700 + (client_index * 40) + (network_offset * 45),
+                            "likes": {"count": base_likes, "totalCount": base_likes},
+                            "comments": {"count": 3 + (post_slot % 6), "total_count": 3 + (post_slot % 6)},
+                            "reactions": {"totalCount": 10 + (post_slot % 9)},
+                            "shares": {"count": post_slot % 5},
+                            "reach": base_reach,
+                            "impressions": int(base_reach * 1.4),
                             "permalink_url": f"https://example.test/{ref}",
                             "created_time": scheduled_at,
-                        }
-                    ),
-                    0,
-                    dt(-1),
-                    dt(-1),
-                    scheduled_at,
-                    None,
-                )
-            )
-            analytics_id += 1
-            post_id += 1
-        topic_id += 1
-        media_count = max(6, len(posted_post_ids))
-        for media_offset in range(media_count):
+                        }),
+                        0, dt(day_offset), dt(day_offset), scheduled_at, None,
+                    ))
+                    analytics_id += 1
+
+                post_id += 1
+            post_slot += 1
+
+        # 14 media assets per client, spread across 90 days
+        for media_offset in range(14):
+            media_theme_name = MEDIA_THEMES[media_offset % len(MEDIA_THEMES)]
             media_name = f"{name} visual {media_offset + 1}"
-            media_theme = ["exterior", "dining", "room comfort", "local experience", "team service", "event atmosphere", "wellness", "family stay"][media_offset % 8]
-            media_rows.append((media_id, client_id, 206, 1, 1, media_name, f"Campaign-ready {media_theme} image for {name}", dt(-15), dt(-1), None))
-            media_ai_rows.append(
-                (
-                    media_id,
-                    media_id,
-                    f"{name} image showing {city} hospitality, {media_theme}, dining and guest experience.",
-                    f"{name} lifestyle visual",
-                    json.dumps(["hotel", "guest", media_theme, city.lower()]),
-                    json.dumps(["warm", "welcoming", "campaign", media_theme]),
-                    json.dumps(["hospitality", "local", "seasonal", name.lower(), media_theme]),
-                    json.dumps({"quality": "approved"}),
-                    json.dumps({"campaign_fit": "high", "theme": media_theme}),
-                    f"Suggested caption for {name} focused on {media_theme} and local hospitality.",
-                    json.dumps({}),
-                    media_id,
-                    None,
-                    dt(-15),
-                    dt(-1),
-                    None,
-                )
-            )
+            inserted_day = -90 + (media_offset * 6)
+            media_rows.append((
+                media_id, client_id, 206, 1, 1, media_name,
+                f"Campaign-ready {media_theme_name} image for {name}",
+                dt(inserted_day), dt(inserted_day + 2), None,
+            ))
+            media_ai_rows.append((
+                media_id, media_id,
+                f"{name} image showing {city} hospitality, {media_theme_name}, dining and guest experience.",
+                f"{name} lifestyle visual — {media_theme_name}",
+                json.dumps(["hotel", "guest", media_theme_name, city.lower()]),
+                json.dumps(["warm", "welcoming", "campaign", media_theme_name]),
+                json.dumps(["hospitality", "local", "seasonal", name.lower(), media_theme_name]),
+                json.dumps({"quality": "approved"}),
+                json.dumps({"campaign_fit": "high", "theme": media_theme_name}),
+                f"Suggested caption for {name} focused on {media_theme_name} and local hospitality.",
+                json.dumps({}), media_id, None,
+                dt(inserted_day), dt(inserted_day + 2), None,
+            ))
             target_post_id = posted_post_ids[media_offset % len(posted_post_ids)] if posted_post_ids else max(1, post_id - 1)
-            post_media_rows.append((media_id, target_post_id, media_id, media_id, media_offset + 1, dt(-4), dt(-1), None))
+            post_media_rows.append((
+                media_id, target_post_id, media_id, media_id, media_offset + 1,
+                dt(inserted_day), dt(inserted_day + 1), None,
+            ))
             media_id += 1
+
     insert_many(
         conn,
         """
@@ -1107,6 +1234,26 @@ def seed_content_media_analytics(conn: sqlite3.Connection) -> None:
 
 
 def seed_inbox_events(conn: sqlite3.Connection) -> None:
+    EVENT_NAMES = [
+        "Food Festival", "Jazz Night", "Design Market", "Art Fair",
+        "Film Festival", "Cultural Expo", "Wine Tasting", "Music Weekend", "Heritage Walk",
+    ]
+    question_templates = [
+        "Guest asks {name} about airport pickup in {city}.",
+        "Complaint: guest says room cleaning was delayed at {name}.",
+        "Guest asks {name} about dining timing in {city}.",
+        "Issue: guest says their booking date looks incorrect for next week.",
+        "Guest asks whether late checkout is possible at {name}.",
+        "Review mention: guest praised staff but asked for parking details.",
+        "Guest asks about nearby events and travel time from {name}.",
+        "Complaint: guest is unhappy about noise near the room and needs property help.",
+        "Guest asks {name} about pool hours in {city}.",
+        "Feedback: guest loved the breakfast but had a question about the loyalty programme.",
+        "Guest asks about group booking rates at {name}.",
+        "Complaint: guest experienced a delay at check-in and needs follow-up.",
+    ]
+    triages = ["reply_now", "needs_property_help", "waiting_on_property", "property_responded"]
+
     interaction_rows = []
     message_rows = []
     triage_rows = []
@@ -1118,52 +1265,53 @@ def seed_inbox_events(conn: sqlite3.Connection) -> None:
     alert_id = 1
     event_id = 1
     seen_city_events: set[tuple[int, str]] = set()
-    triages = ["reply_now", "needs_property_help", "waiting_on_property", "property_responded"]
-    question_templates = [
-        "Guest asks {name} about airport pickup in {city}.",
-        "Complaint: guest says room cleaning was delayed at {name}.",
-        "Guest asks {name} about dining timing in {city}.",
-        "Issue: guest says their booking date looks incorrect for next week.",
-        "Guest asks whether late checkout is possible at {name}.",
-        "Review mention: guest praised staff but asked for parking details.",
-        "Guest asks about nearby events and travel time from {name}.",
-        "Complaint: guest is unhappy about noise near the room and needs property help.",
-    ]
+
     for client_index, (client_id, name, _, city_id, city, _) in enumerate(CLIENTS):
-        for offset in range(8):
-            triage = triages[(client_index + offset) % len(triages)]
-            title = f"{name} guest question {offset + 1}"
-            interaction_rows.append((interaction_id, client_id, json.dumps({"source": "dummy"}), offset % 3, title))
-            content = question_templates[offset % len(question_templates)].format(name=name, city=city)
-            network_id = [1, 7, 9, 11][offset % 4]
-            message_type = ["comments", "messages", "review", "mentions"][offset % 4]
-            message_rows.append((message_id, client_id, f"src-{message_id}", dt(-offset), content, f"Guest {offset + 1}", f"https://example.test/messages/{message_id}", network_id, interaction_id, None, "new", "page", message_type, content, f"guest{offset}", "en", json.dumps({"name": f"Guest {offset + 1}"})))
+        # ~30 interactions per client over 90 days (every 3 days)
+        msg_slot = 0
+        for day_offset in range(-88, 2, 3):
+            triage = triages[(client_index + msg_slot) % len(triages)]
+            title = f"{name} guest question {msg_slot + 1}"
+            interaction_rows.append((interaction_id, client_id, json.dumps({"source": "dummy"}), msg_slot % 3, title))
+            content = question_templates[msg_slot % len(question_templates)].format(name=name, city=city)
+            network_id = [1, 7, 9, 11][msg_slot % 4]
+            message_type = ["comments", "messages", "review", "mentions"][msg_slot % 4]
+            message_rows.append((
+                message_id, client_id, f"src-{message_id}", dt(day_offset),
+                content, f"Guest {msg_slot + 1}",
+                f"https://example.test/messages/{message_id}",
+                network_id, interaction_id, None, "new", "page",
+                message_type, content, f"guest{msg_slot}", "en",
+                json.dumps({"name": f"Guest {msg_slot + 1}"}),
+            ))
             triage_rows.append((interaction_id, interaction_id, triage))
             if triage in {"waiting_on_property", "property_responded"}:
-                alert_rows.append((alert_id, interaction_id, "sent", dt(-offset), None))
+                alert_rows.append((alert_id, interaction_id, "sent", dt(day_offset), None))
                 if triage == "property_responded":
-                    reply_rows.append((alert_id, alert_id, "Property confirmed the answer.", dt(-offset + 1), None))
+                    reply_rows.append((alert_id, alert_id, "Property confirmed the answer.", dt(day_offset + 1), None))
                 alert_id += 1
             interaction_id += 1
             message_id += 1
-        for event_offset, event_name in enumerate(["Food Festival", "Jazz Night", "Design Market"]):
+            msg_slot += 1
+
+        # 9 events per unique city: past 60 days → future 30 days, every 10 days
+        for event_offset, day_offset in enumerate(range(-60, 31, 10)):
+            event_name = EVENT_NAMES[event_offset % len(EVENT_NAMES)]
             event_key = (city_id, event_name)
             if event_key in seen_city_events:
                 continue
             seen_city_events.add(event_key)
-            event_rows.append(
-                (
-                    event_id,
-                    city_id,
-                    f"{city} {event_name}",
-                    d(event_offset + 1),
-                    "local_event",
-                    f"{city} downtown",
-                    "leisure guests",
-                    None,
-                )
-            )
+            event_rows.append((
+                event_id, city_id,
+                f"{city} {event_name}",
+                d(day_offset),
+                "local_event",
+                f"{city} downtown",
+                "leisure guests",
+                None,
+            ))
             event_id += 1
+
     insert_many(conn, "INSERT INTO jx_bridge.interactions (interaction_id, client_id, metadata, priority, title) VALUES (?, ?, ?, ?, ?)", interaction_rows)
     insert_many(
         conn,
@@ -1191,7 +1339,7 @@ def main() -> None:
     conn.commit()
     conn.close()
     print(f"Created dummy DB at {DB_DIR}")
-    print(f"Seeded {len(CLIENTS)} clients with knowledge, content, inbox, media, analytics, access, and events data.")
+    print(f"Seeded {len(CLIENTS)} clients (3 months of data) with content, inbox, media, analytics, access, and events.")
 
 
 if __name__ == "__main__":
