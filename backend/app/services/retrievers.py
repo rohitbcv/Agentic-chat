@@ -91,6 +91,15 @@ JOIN_MAP_CATALOG: dict[str, dict[str, Any]] = {
             "jx_bridge.alert_replies",
         ],
     },
+    "pricing_lookup": {
+        "label": "internal pricing lookup path",
+        "path": [
+            "clients.clients",
+            "clients.client_notes",
+            "clients.property_details",
+            "clients.client_details",
+        ],
+    },
     "event_lookup": {
         "label": "event lookup path",
         "path": [
@@ -163,6 +172,11 @@ SQL_TEMPLATE_CATALOG: dict[str, dict[str, Any]] = {
         "tables": ["general.events", "clients.clients", "world.cities"],
         "join_path": "event_lookup",
         "description": "Return nearby or upcoming events relevant to a client location.",
+    },
+    "pricing_lookup": {
+        "tables": ["clients.client_notes", "clients.property_details", "clients.client_details"],
+        "join_path": "pricing_lookup",
+        "description": "Search internal client notes and property details for any mention of room rates, booking prices, or tariffs.",
     },
 }
 
@@ -1064,6 +1078,79 @@ def execute_sql_capability(capability: str, payload: RoutingPayload) -> Retrieva
             rows=rows,
             sql=sql.strip(),
             source_traces=[_source_trace("event lookup", "sql", SQL_TEMPLATE_CATALOG[capability]["tables"], rows, sql.strip(), SQL_TEMPLATE_CATALOG[capability]["join_path"], scope_client_ids)],
+        )
+
+    if capability == "pricing_lookup":
+        # Search client_notes for pricing keywords
+        notes_sql = """
+        SELECT
+          cn.id,
+          cn.note_type,
+          cn.note,
+          cn.created_at,
+          'client_notes' AS source_table
+        FROM clients.client_notes cn
+        WHERE cn.client_id = :client_id
+          AND cn.deleted_at IS NULL
+          AND (
+            LOWER(cn.note) LIKE '%price%'
+            OR LOWER(cn.note) LIKE '%rate%'
+            OR LOWER(cn.note) LIKE '%tariff%'
+            OR LOWER(cn.note) LIKE '%booking%'
+            OR LOWER(cn.note) LIKE '%per night%'
+            OR LOWER(cn.note) LIKE '%nightly%'
+            OR LOWER(cn.note) LIKE '%room cost%'
+            OR LOWER(cn.note) LIKE '%cost per%'
+          )
+        ORDER BY cn.created_at DESC NULLS LAST
+        LIMIT 20
+        """
+        notes_rows = _execute_sql(notes_sql, {"client_id": client_id})
+
+        # Search property_details for pricing keywords
+        details_sql = """
+        SELECT
+          pd.id,
+          pd.section,
+          pd.content,
+          pd.updated_at,
+          'property_details' AS source_table
+        FROM clients.property_details pd
+        WHERE pd.client_id = :client_id
+          AND pd.deleted_at IS NULL
+          AND (
+            LOWER(pd.content) LIKE '%price%'
+            OR LOWER(pd.content) LIKE '%rate%'
+            OR LOWER(pd.content) LIKE '%tariff%'
+            OR LOWER(pd.content) LIKE '%booking%'
+            OR LOWER(pd.content) LIKE '%per night%'
+            OR LOWER(pd.content) LIKE '%nightly%'
+          )
+        ORDER BY pd.updated_at DESC NULLS LAST
+        LIMIT 10
+        """
+        details_rows = _execute_sql(details_sql, {"client_id": client_id})
+
+        combined_rows = notes_rows + details_rows
+        tables = SQL_TEMPLATE_CATALOG[capability]["tables"]
+        return RetrievalResult(
+            mode="sql",
+            template_key=capability,
+            tables=tables,
+            rows=combined_rows,
+            sql=f"{notes_sql.strip()}\n-- UNION --\n{details_sql.strip()}",
+            source_traces=[
+                _source_trace(
+                    "internal pricing lookup",
+                    "sql",
+                    tables,
+                    combined_rows,
+                    notes_sql.strip(),
+                    SQL_TEMPLATE_CATALOG[capability]["join_path"],
+                    scope_client_ids,
+                    notes=[f"Searched client_notes ({len(notes_rows)} rows) and property_details ({len(details_rows)} rows) for price/rate keywords."],
+                )
+            ],
         )
 
     return RetrievalResult(mode="sql", template_key=capability, support_notes=["No approved SQL template matched this capability."])

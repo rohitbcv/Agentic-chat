@@ -1489,3 +1489,170 @@ button {
     flex-direction: column;
   }
 }
+
+/* ── Booking Price Agent — OTA confirmation buttons ── */
+.otaConfirmation {
+  display: flex;
+  gap: 10px;
+  margin-top: 14px;
+  flex-wrap: wrap;
+}
+
+.otaConfirmBtn {
+  padding: 9px 20px;
+  border-radius: 8px;
+  font-size: 0.875rem;
+  font-weight: 600;
+  cursor: pointer;
+  border: none;
+  transition: opacity 0.15s;
+}
+
+.otaConfirmBtn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.otaConfirmBtn--yes {
+  background: #2563eb;
+  color: #fff;
+}
+
+.otaConfirmBtn--yes:hover:not(:disabled) {
+  background: #1d4ed8;
+}
+
+.otaConfirmBtn--no {
+  background: #f1f5f9;
+  color: #475569;
+  border: 1px solid #e2e8f0;
+}
+
+.otaConfirmBtn--no:hover:not(:disabled) {
+  background: #e2e8f0;
+}
+
+/* ── OTA Results Card ── */
+.otaResultsCard {
+  margin-top: 16px;
+  border: 1px solid #e2e8f0;
+  border-radius: 12px;
+  overflow: hidden;
+  background: #f8fafc;
+}
+
+.otaResultsHeader {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 14px;
+  background: #1e293b;
+  color: #fff;
+  font-size: 0.85rem;
+  font-weight: 600;
+}
+
+.otaResultsIcon {
+  font-size: 1rem;
+}
+
+.otaResultsTitle {
+  flex: 1;
+}
+
+.otaResultsBadge {
+  background: #334155;
+  padding: 2px 8px;
+  border-radius: 20px;
+  font-size: 0.72rem;
+  font-weight: 500;
+  color: #94a3b8;
+}
+
+.otaResultsList {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+}
+
+.otaResultRow {
+  padding: 12px 14px;
+  border-bottom: 1px solid #e2e8f0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.otaResultRow:last-child {
+  border-bottom: none;
+}
+
+.otaResultName {
+  font-weight: 600;
+  font-size: 0.9rem;
+  color: #1e293b;
+}
+
+.otaResultMeta {
+  display: flex;
+  gap: 10px;
+  font-size: 0.82rem;
+  color: #475569;
+}
+
+.otaResultRate {
+  background: #dcfce7;
+  color: #166534;
+  padding: 2px 8px;
+  border-radius: 6px;
+  font-weight: 600;
+}
+
+.otaResultRating {
+  color: #f59e0b;
+  font-weight: 600;
+}
+
+.otaSubPrices {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 4px;
+}
+
+.otaSubPrice {
+  background: #e0f2fe;
+  color: #0369a1;
+  font-size: 0.75rem;
+  padding: 2px 8px;
+  border-radius: 20px;
+}
+
+.otaResultLink {
+  font-size: 0.78rem;
+  color: #2563eb;
+  text-decoration: none;
+  margin-top: 4px;
+}
+
+.otaResultLink:hover {
+  text-decoration: underline;
+}
+
+/* ── Pricing rail section ── */
+.railCard--pricing {
+  border-top: 2px solid #f59e0b;
+}
+
+.pillStatus--pricing {
+  background: #fef3c7;
+  color: #92400e;
+  border-radius: 20px;
+  padding: 2px 10px;
+  font-size: 0.75rem;
+  font-weight: 600;
+}
+
+.pricingChip {
+  border-left: 3px solid #f59e0b !important;
+}

@@ -75,7 +75,7 @@ export default function App() {
     setSessionClientName(null);
   }
 
-  async function runQuery(rawQuery) {
+  async function runQuery(rawQuery, options = {}) {
     const query = rawQuery.trim();
     if (!query || isSending) return;
     const requestHistory = [...messages, { role: "user", content: query }]
@@ -99,6 +99,7 @@ export default function App() {
           client_id: effectiveClientId,
           mode: "read_only",
           history: requestHistory,
+          confirm_ota_search: options.confirmOta === true,
         }),
       });
 
@@ -145,6 +146,11 @@ export default function App() {
           mode: data.mode || null,
           decisionValidation: data.decision_validation || null,
           evidenceValidation: data.evidence_validation || null,
+          confirmationPrompt: data.confirmation_prompt === true,
+          originalQuery: data.original_query || query,
+          otaResults: data.ota_results || [],
+          internalPricingFound: data.internal_pricing_found === true,
+          internalPrices: data.internal_prices || [],
         },
       ]);
     } catch (err) {
@@ -249,6 +255,35 @@ export default function App() {
             ))}
           </div>
         </section>
+
+        {(config?.pricing_sample_queries || []).length ? (
+          <section className="railCard railCard--pricing">
+            <div className="panelTitleRow">
+              <div>
+                <p className="eyebrow">Booking Price Agent</p>
+                <h2>Pricing Tests</h2>
+              </div>
+              <span className="pillStatus pillStatus--pricing">{config.pricing_sample_queries.length} probes</span>
+            </div>
+            <p className="mutedCopy validationRailNote">
+              Tests the internal pricing check + OTA confirmation flow.
+            </p>
+            <div className="chipStack validationChipStack">
+              {config.pricing_sample_queries.map((item) => (
+                <button
+                  className="validationChip pricingChip"
+                  key={item.query}
+                  type="button"
+                  onClick={() => runQuery(item.query)}
+                >
+                  <span className="validationChipLabel">{item.label}</span>
+                  <span className="validationChipQuery">{item.query}</span>
+                  {item.checks ? <span className="validationChipChecks">{item.checks}</span> : null}
+                </button>
+              ))}
+            </div>
+          </section>
+        ) : null}
 
         <section className="railCard">
           <div className="panelTitleRow">
@@ -384,7 +419,76 @@ export default function App() {
                   </div>
                 ) : null}
 
-                <p>{message.content}</p>
+                <p style={{ whiteSpace: "pre-wrap" }}>{message.content}</p>
+
+                {/* OTA confirmation YES/NO buttons */}
+                {message.confirmationPrompt ? (
+                  <div className="otaConfirmation">
+                    <button
+                      className="otaConfirmBtn otaConfirmBtn--yes"
+                      disabled={isSending}
+                      type="button"
+                      onClick={() => runQuery(message.originalQuery, { confirmOta: true })}
+                    >
+                      Yes, check OTA prices
+                    </button>
+                    <button
+                      className="otaConfirmBtn otaConfirmBtn--no"
+                      disabled={isSending}
+                      type="button"
+                      onClick={() =>
+                        setMessages((current) =>
+                          current.map((m) =>
+                            m === message ? { ...m, confirmationPrompt: false } : m
+                          )
+                        )
+                      }
+                    >
+                      No thanks
+                    </button>
+                  </div>
+                ) : null}
+
+                {/* OTA price comparison card */}
+                {message.otaResults?.length ? (
+                  <div className="otaResultsCard">
+                    <div className="otaResultsHeader">
+                      <span className="otaResultsIcon">🌐</span>
+                      <span className="otaResultsTitle">Live OTA Prices</span>
+                      <span className="otaResultsBadge">SerpAPI · Google Hotels</span>
+                    </div>
+                    <div className="otaResultsList">
+                      {message.otaResults.map((r, i) => (
+                        <div className="otaResultRow" key={i}>
+                          <div className="otaResultName">{r.name}</div>
+                          <div className="otaResultMeta">
+                            {r.rate_per_night ? (
+                              <span className="otaResultRate">{r.rate_per_night}/night</span>
+                            ) : null}
+                            {r.rating ? (
+                              <span className="otaResultRating">★ {r.rating}</span>
+                            ) : null}
+                          </div>
+                          {r.ota_prices?.length ? (
+                            <div className="otaSubPrices">
+                              {r.ota_prices.map((p, j) => (
+                                <span className="otaSubPrice" key={j}>
+                                  {p.source}: {p.rate}
+                                </span>
+                              ))}
+                            </div>
+                          ) : null}
+                          {r.link ? (
+                            <a className="otaResultLink" href={r.link} target="_blank" rel="noopener noreferrer">
+                              View on OTA →
+                            </a>
+                          ) : null}
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                ) : null}
+
                 {message.mediaPreviews?.length ? (
                   <div className="mediaPreviewBlock">
                     <span className="mediaPreviewTitle">Media used</span>

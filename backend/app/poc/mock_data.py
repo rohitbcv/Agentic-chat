@@ -83,6 +83,35 @@ VALIDATION_SAMPLE_QUERIES: list[dict[str, str]] = [
 ]
 
 
+PRICING_SAMPLE_QUERIES: list[dict[str, str]] = [
+    {
+        "label": "Internal price found → show + OTA",
+        "query": "What is the room rate for Hotel Ramtin?",
+        "checks": "Internal notes checked → if price found, return it + SerpAPI OTA results",
+    },
+    {
+        "label": "No internal price → ask user confirmation",
+        "query": "What is the booking price for Hotel d'Angleterre?",
+        "checks": "No internal pricing rows → YES/NO confirmation prompt shown",
+    },
+    {
+        "label": "Date-specific pricing query",
+        "query": "How much does Hotel Ramtin cost in August 2026?",
+        "checks": "Date range extracted → passed to SerpAPI check-in/check-out params",
+    },
+    {
+        "label": "Tariff keyword trigger",
+        "query": "What are the tariffs for hotel Yash?",
+        "checks": "Tariff keyword routes to Booking Price Agent",
+    },
+    {
+        "label": "Missing client → clarification",
+        "query": "What are the current room rates?",
+        "checks": "No client resolved → orchestrator asks which hotel",
+    },
+]
+
+
 AGENT_CARDS: list[dict[str, str]] = [
     {
         "name": "Orchestrator Agent",

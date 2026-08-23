@@ -26,7 +26,8 @@ from ..services.safety import SafetyReview, build_audit_event, evaluate_answer_s
 from ..services.retrievers import SQL_TEMPLATE_CATALOG
 from ..services.specialist_agents import SPECIALIST_AGENT_CONTRACTS, run_specialist_agent, _fallback_contract
 from ..services.validation import validate_decision, validate_evidence
-from .mock_data import AGENT_CARDS, MOCK_CLIENTS, SAMPLE_QUERIES, VALIDATION_SAMPLE_QUERIES
+from ..services.web_search import search_hotel_prices
+from .mock_data import AGENT_CARDS, MOCK_CLIENTS, PRICING_SAMPLE_QUERIES, SAMPLE_QUERIES, VALIDATION_SAMPLE_QUERIES
 
 router = APIRouter(prefix="/api/agent-poc", tags=["agent-poc"])
 
@@ -73,6 +74,7 @@ class PocChatRequest(BaseModel):
     user_id: int | None = None
     mode: str = "read_only"
     history: list[dict[str, str]] = Field(default_factory=list)
+    confirm_ota_search: bool = False
 
 
 def _json_safe(value: Any) -> Any:
@@ -426,6 +428,218 @@ def _build_validation_trace(validation: Any) -> dict[str, Any]:
         "blocking_issues": validation.blocking_issues,
         "warnings": validation.warnings,
         "notes": validation.notes,
+    }
+
+
+def _call_serpapi_ota(routing_payload: RoutingPayload, trace: list[dict[str, Any]]) -> dict[str, Any]:
+    """Call SerpAPI for OTA hotel prices and append a trace step. Returns the raw web_search result dict."""
+    entities = routing_payload.entities
+    property_name = entities.property_name or routing_payload.query
+    city = entities.city or ""
+    date_range = entities.date_range
+    check_in = date_range.start.isoformat() if date_range and date_range.start else None
+    check_out = date_range.end.isoformat() if date_range and date_range.end else None
+
+    ota_result = search_hotel_prices(property_name, city, check_in, check_out)
+    trace.append({
+        "agent": "Booking Price Agent — Web Search (SerpAPI)",
+        "status": "completed" if not ota_result.get("error") else "error",
+        "summary": (
+            f"Searched OTA platforms for '{ota_result['query']}'. "
+            f"Found {len(ota_result.get('results', []))} result(s)."
+            if not ota_result.get("error")
+            else f"OTA search failed or is unconfigured: {ota_result['error']}"
+        ),
+        "source": ota_result.get("source"),
+        "enabled": ota_result.get("enabled"),
+        "query": ota_result.get("query"),
+        "result_count": len(ota_result.get("results", [])),
+    })
+    return ota_result
+
+
+def _format_internal_pricing_answer(rows: list[dict[str, Any]], client_name: str | None) -> str:
+    """Build a human-readable answer from internal pricing rows."""
+    label = client_name or "this property"
+    if not rows:
+        return f"No booking price details are available in the system for {label}."
+    parts = [f"Here is the internal pricing information found for **{label}**:\n"]
+    for row in rows[:10]:
+        source = row.get("source_table", "internal")
+        if source == "client_notes":
+            note_type = row.get("note_type") or "Note"
+            note = row.get("note") or ""
+            parts.append(f"- [{note_type}] {note}")
+        else:
+            section = row.get("section") or "Property detail"
+            content = row.get("content") or ""
+            parts.append(f"- [{section}] {content}")
+    parts.append("\n*Source: Internal system data.*")
+    return "\n".join(parts)
+
+
+def _format_ota_answer(ota_result: dict[str, Any]) -> str:
+    """Build a human-readable OTA price comparison block."""
+    results = ota_result.get("results", [])
+    error = ota_result.get("error")
+    enabled = ota_result.get("enabled", False)
+
+    if not enabled and error:
+        return f"\n\n**OTA Price Search:** {error}"
+    if error:
+        return f"\n\n**OTA Price Search failed:** {error}"
+    if not results:
+        return f"\n\n**OTA Price Search:** No results found on OTA platforms for the requested dates."
+
+    parts = ["\n\n**Live OTA Prices** *(from SerpAPI Google Hotels)*:\n"]
+    for r in results[:6]:
+        name = r.get("name") or "Hotel"
+        rate = r.get("rate_per_night") or r.get("total_rate") or "N/A"
+        rating = r.get("rating")
+        link = r.get("link") or ""
+        ota_prices = r.get("ota_prices") or []
+        line = f"- **{name}** — {rate}/night"
+        if rating:
+            line += f" | Rating: {rating}"
+        parts.append(line)
+        for ota in ota_prices[:3]:
+            src = ota.get("source") or "OTA"
+            ota_rate = ota.get("rate") or "N/A"
+            parts.append(f"  - {src}: {ota_rate}")
+    return "\n".join(parts)
+
+
+def _handle_pricing_flow(
+    routing_payload: RoutingPayload,
+    decision: Any,
+    payload: PocChatRequest,
+    trace: list[dict[str, Any]],
+    query: str,
+    chat_history: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """Full pricing flow handler: internal check → OTA search (with optional confirmation gate)."""
+    from ..services.context import merge_retrieval_context
+    from ..services.safety import evaluate_answer_safety, build_audit_event
+    from ..services.followups import build_follow_up_questions
+
+    client_name = routing_payload.entities.property_name
+
+    # If user already confirmed OTA search (clicked YES), skip to SerpAPI
+    if payload.confirm_ota_search:
+        ota_result = _call_serpapi_ota(routing_payload, trace)
+        answer = (
+            "You asked me to check OTA platforms for the latest prices.\n"
+            + _format_ota_answer(ota_result)
+        )
+        context = merge_retrieval_context(routing_payload, decision, None, None)
+        safety = evaluate_answer_safety(answer, routing_payload, decision, context)
+        follow_up_questions = build_follow_up_questions(
+            routing_payload, decision, context, None, None, answer, chat_history=chat_history,
+        )
+        trace.extend([_build_context_trace(context), _build_safety_trace(safety)])
+        return {
+            "mode": "pricing_ota_only",
+            "query": query,
+            "client_id": routing_payload.entities.client_id,
+            "capability_state": "fully_supported",
+            "route": _route_payload(decision),
+            "answer": answer,
+            "follow_up_questions": follow_up_questions,
+            "agent_trace": trace,
+            "sql_plan": None,
+            "knowledge_plan": None,
+            "sources": ["serpapi_google_hotels"],
+            "source_trace": [],
+            "context": context.to_dict(),
+            "safety": safety.to_dict(),
+            "audit_event": build_audit_event(query, routing_payload, decision, context, safety),
+            "intake": routing_payload.to_dict(),
+            "orchestrator": decision.to_dict(),
+            "internal_pricing_found": False,
+            "internal_prices": [],
+            "ota_results": ota_result.get("results", []),
+            "confirmation_prompt": False,
+            "original_query": query,
+        }
+
+    # Run internal retrieval first
+    agent_run = run_specialist_agent(routing_payload, decision)
+    sql_result = agent_run.sql_result
+    internal_rows = sql_result.rows if sql_result else []
+    has_internal_pricing = len(internal_rows) > 0
+
+    trace.extend(agent_run.trace_steps)
+
+    if has_internal_pricing:
+        # Return internal pricing + call SerpAPI in parallel
+        ota_result = _call_serpapi_ota(routing_payload, trace)
+        internal_answer = _format_internal_pricing_answer(internal_rows, client_name)
+        ota_block = _format_ota_answer(ota_result)
+        answer = internal_answer + ota_block
+        context = merge_retrieval_context(routing_payload, decision, sql_result, None)
+        safety = evaluate_answer_safety(answer, routing_payload, decision, context)
+        follow_up_questions = build_follow_up_questions(
+            routing_payload, decision, context, sql_result, None, answer, chat_history=chat_history,
+        )
+        trace.extend([_build_context_trace(context), _build_safety_trace(safety)])
+        sources = list({t for t in (sql_result.tables if sql_result else [])})
+        return {
+            "mode": "pricing_with_ota",
+            "query": query,
+            "client_id": routing_payload.entities.client_id,
+            "capability_state": "fully_supported",
+            "route": _route_payload(decision),
+            "answer": answer,
+            "follow_up_questions": follow_up_questions,
+            "agent_trace": trace,
+            "sql_plan": _build_sql_plan(sql_result),
+            "knowledge_plan": None,
+            "sources": sources,
+            "source_trace": _json_safe([t.to_dict() for t in agent_run.source_traces]),
+            "context": context.to_dict(),
+            "safety": safety.to_dict(),
+            "audit_event": build_audit_event(query, routing_payload, decision, context, safety),
+            "intake": routing_payload.to_dict(),
+            "orchestrator": decision.to_dict(),
+            "internal_pricing_found": True,
+            "internal_prices": _json_safe(internal_rows),
+            "ota_results": ota_result.get("results", []),
+            "confirmation_prompt": False,
+            "original_query": query,
+        }
+
+    # No internal pricing — ask for confirmation before calling OTA
+    no_data_answer = (
+        f"No price details are available in the system for "
+        f"**{client_name or 'this property'}** for any day.\n\n"
+        "Would you like me to check OTA sites for the latest available price details?"
+    )
+    context = merge_retrieval_context(routing_payload, decision, None, None)
+    safety = evaluate_answer_safety(no_data_answer, routing_payload, decision, context)
+    trace.extend([_build_context_trace(context), _build_safety_trace(safety)])
+    return {
+        "mode": "pricing_confirmation_needed",
+        "query": query,
+        "client_id": routing_payload.entities.client_id,
+        "capability_state": "partially_supported",
+        "route": _route_payload(decision),
+        "answer": no_data_answer,
+        "follow_up_questions": [],
+        "agent_trace": trace,
+        "sql_plan": None,
+        "knowledge_plan": None,
+        "sources": [],
+        "source_trace": [],
+        "context": context.to_dict(),
+        "safety": safety.to_dict(),
+        "audit_event": build_audit_event(query, routing_payload, decision, context, safety),
+        "intake": routing_payload.to_dict(),
+        "orchestrator": decision.to_dict(),
+        "internal_pricing_found": False,
+        "internal_prices": [],
+        "ota_results": [],
+        "confirmation_prompt": True,
+        "original_query": query,
     }
 
 
@@ -1053,6 +1267,7 @@ def get_agent_poc_config() -> dict[str, Any]:
         "clients": _config_clients(),
         "sample_queries": SAMPLE_QUERIES,
         "validation_sample_queries": VALIDATION_SAMPLE_QUERIES,
+        "pricing_sample_queries": PRICING_SAMPLE_QUERIES,
         "backend_notes": [
             "Phase 0 and Phase 1 docs lock the read-only scope and exposure rules.",
             "Phase 2 intake resolves intent, entities, and scoped client access before retrieval.",
@@ -1197,6 +1412,10 @@ def run_agent_poc_chat(payload: PocChatRequest) -> dict[str, Any]:
             "decision_validation": decision_validation.to_dict(),
             "evidence_validation": None,
         }
+
+    # Pricing capability — handled by its own two-turn flow
+    if decision.capability == "pricing_lookup":
+        return _handle_pricing_flow(routing_payload, decision, payload, trace, query, chat_history)
 
     agent_run = run_specialist_agent(routing_payload, decision)
     sql_result = agent_run.sql_result

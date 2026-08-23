@@ -166,13 +166,13 @@ ROUTING_MATRIX: list[dict[str, object]] = [
     {
         "capability": "pricing_lookup",
         "intent": "client_knowledge",
-        "agent_name": "Client Knowledge and FAQ Agent",
+        "agent_name": "Booking Price Agent",
         "domain": "pricing",
-        "retriever_modes": ["sql"],
-        "capability_state": "not_supported",
-        "template_keys": [],
-        "join_paths": ["property_knowledge"],
-        "tables": ["clients.property_details", "clients.client_notes"],
+        "retriever_modes": ["sql", "vector"],
+        "capability_state": "fully_supported",
+        "template_keys": ["pricing_lookup"],
+        "join_paths": ["pricing_lookup"],
+        "tables": ["clients.client_notes", "clients.property_details", "clients.client_details"],
     },
 ]
 
@@ -396,14 +396,16 @@ def build_orchestrator_decision(payload: RoutingPayload) -> OrchestratorDecision
             tables=list(entry["tables"]),
         )
 
-    if any(word in q for word in ("price", "pricing", "rate", "rates", "cost")):
+    if any(word in q for word in ("price", "pricing", "rate", "rates", "cost", "tariff", "booking price", "room rate", "nightly rate", "book", "how much")):
+        if payload.entities.client_id is None:
+            return _clarification("Which hotel or property should I check booking prices for?")
         entry = _matrix_entry("pricing_lookup")
         return OrchestratorDecision(
             capability="pricing_lookup",
             intent="client_knowledge",
             agent_name=str(entry["agent_name"]),
             domain=str(entry["domain"]),
-            rationale="The request is a pricing question, but the current schema does not provide dependable hotel rate facts.",
+            rationale="The request asks for booking or room pricing. Checking internal data first, then OTA sources if needed.",
             confidence=0.98,
             capability_state=str(entry["capability_state"]),
             retriever_modes=list(entry["retriever_modes"]),
