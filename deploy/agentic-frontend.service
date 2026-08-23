@@ -1,0 +1,14 @@
+[Unit]
+Description=Agentic Chat Frontend (Vite dev server)
+After=network.target
+
+[Service]
+WorkingDirectory=/root/AI_Automated_agent/Agentic-chat/frontend
+ExecStart=npm run dev -- --host 0.0.0.0 --port 5173
+Restart=always
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
