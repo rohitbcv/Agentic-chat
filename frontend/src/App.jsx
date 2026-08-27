@@ -149,6 +149,11 @@ export default function App() {
           confirmationPrompt: data.confirmation_prompt === true,
           originalQuery: data.original_query || query,
           otaResults: data.ota_results || [],
+          otaFetchedAt: data.ota_fetched_at || null,
+          otaCheckIn: data.ota_check_in || null,
+          otaCheckOut: data.ota_check_out || null,
+          otaDateWarnings: data.ota_date_warnings || [],
+          otaNameWarnings: data.ota_name_warnings || [],
           internalPricingFound: data.internal_pricing_found === true,
           internalPrices: data.internal_prices || [],
         },
@@ -455,15 +460,35 @@ export default function App() {
                     <div className="otaResultsHeader">
                       <span className="otaResultsIcon">🌐</span>
                       <span className="otaResultsTitle">Live OTA Prices</span>
-                      <span className="otaResultsBadge">SerpAPI · Google Hotels</span>
+                      <span className="otaResultsBadge">SerpAPI · Google Hotels · USD</span>
                     </div>
+
+                    {/* Guardrail meta row: dates + freshness */}
+                    <div className="otaMetaRow">
+                      {message.otaCheckIn && message.otaCheckOut ? (
+                        <span className="otaMetaDates">
+                          📅 {message.otaCheckIn} → {message.otaCheckOut}
+                        </span>
+                      ) : null}
+                      {message.otaFetchedAt ? (
+                        <span className="otaFreshness">
+                          🕐 Fetched {message.otaFetchedAt.slice(0, 16).replace("T", " ")} UTC
+                        </span>
+                      ) : null}
+                    </div>
+
+                    {/* Guardrail warnings */}
+                    {[...(message.otaDateWarnings || []), ...(message.otaNameWarnings || [])].map((w, i) => (
+                      <div className="otaWarning" key={i}>⚠ {w}</div>
+                    ))}
+
                     <div className="otaResultsList">
                       {message.otaResults.map((r, i) => (
                         <div className="otaResultRow" key={i}>
                           <div className="otaResultName">{r.name}</div>
                           <div className="otaResultMeta">
                             {r.rate_per_night ? (
-                              <span className="otaResultRate">{r.rate_per_night}/night</span>
+                              <span className="otaResultRate">{r.rate_per_night}/night USD</span>
                             ) : null}
                             {r.rating ? (
                               <span className="otaResultRating">★ {r.rating}</span>
@@ -473,7 +498,7 @@ export default function App() {
                             <div className="otaSubPrices">
                               {r.ota_prices.map((p, j) => (
                                 <span className="otaSubPrice" key={j}>
-                                  {p.source}: {p.rate}
+                                  {p.source}: {p.rate} USD
                                 </span>
                               ))}
                             </div>
@@ -486,6 +511,7 @@ export default function App() {
                         </div>
                       ))}
                     </div>
+                    <div className="otaCurrencyNote">All prices in USD · External market data, not confirmed internal rates</div>
                   </div>
                 ) : null}
 

@@ -441,19 +441,32 @@ def _call_serpapi_ota(routing_payload: RoutingPayload, trace: list[dict[str, Any
     check_out = date_range.end.isoformat() if date_range and date_range.end else None
 
     ota_result = search_hotel_prices(property_name, city, check_in, check_out)
+
+    date_warnings = ota_result.get("date_warnings") or []
+    name_warnings = ota_result.get("name_warnings") or []
+    all_warnings = date_warnings + name_warnings
+
     trace.append({
         "agent": "Booking Price Agent — Web Search (SerpAPI)",
         "status": "completed" if not ota_result.get("error") else "error",
         "summary": (
-            f"Searched OTA platforms for '{ota_result['query']}'. "
-            f"Found {len(ota_result.get('results', []))} result(s)."
+            f"Searched OTA platforms for '{ota_result['query']}' "
+            f"(check-in: {ota_result.get('check_in')}, check-out: {ota_result.get('check_out')}). "
+            f"Found {len(ota_result.get('results', []))} result(s). "
+            f"Fetched at {ota_result.get('fetched_at', 'unknown')}."
+            + (f" Warnings: {'; '.join(all_warnings)}" if all_warnings else "")
             if not ota_result.get("error")
-            else f"OTA search failed or is unconfigured: {ota_result['error']}"
+            else f"OTA search failed: {ota_result['error']}"
         ),
         "source": ota_result.get("source"),
         "enabled": ota_result.get("enabled"),
         "query": ota_result.get("query"),
         "result_count": len(ota_result.get("results", [])),
+        "fetched_at": ota_result.get("fetched_at"),
+        "check_in": ota_result.get("check_in"),
+        "check_out": ota_result.get("check_out"),
+        "date_warnings": date_warnings,
+        "name_warnings": name_warnings,
     })
     return ota_result
 
@@ -483,6 +496,11 @@ def _format_ota_answer(ota_result: dict[str, Any]) -> str:
     results = ota_result.get("results", [])
     error = ota_result.get("error")
     enabled = ota_result.get("enabled", False)
+    fetched_at = ota_result.get("fetched_at", "")
+    check_in = ota_result.get("check_in", "")
+    check_out = ota_result.get("check_out", "")
+    date_warnings = ota_result.get("date_warnings") or []
+    name_warnings = ota_result.get("name_warnings") or []
 
     if not enabled and error:
         return f"\n\n**OTA Price Search:** {error}"
@@ -491,21 +509,30 @@ def _format_ota_answer(ota_result: dict[str, Any]) -> str:
     if not results:
         return f"\n\n**OTA Price Search:** No results found on OTA platforms for the requested dates."
 
-    parts = ["\n\n**Live OTA Prices** *(from SerpAPI Google Hotels)*:\n"]
+    parts = [f"\n\n**Live OTA Prices** *(SerpAPI · Google Hotels · All prices in USD)*"]
+    if check_in and check_out:
+        parts.append(f"*Dates: {check_in} → {check_out}*")
+    if fetched_at:
+        parts.append(f"*Prices fetched: {fetched_at[:19].replace('T', ' ')} UTC*")
+
+    # Date and name warnings
+    for w in date_warnings + name_warnings:
+        parts.append(f"\n> ⚠ {w}")
+
+    parts.append("")
     for r in results[:6]:
         name = r.get("name") or "Hotel"
         rate = r.get("rate_per_night") or r.get("total_rate") or "N/A"
         rating = r.get("rating")
-        link = r.get("link") or ""
         ota_prices = r.get("ota_prices") or []
-        line = f"- **{name}** — {rate}/night"
+        line = f"- **{name}** — {rate}/night (USD)"
         if rating:
-            line += f" | Rating: {rating}"
+            line += f" | ★ {rating}"
         parts.append(line)
         for ota in ota_prices[:3]:
             src = ota.get("source") or "OTA"
             ota_rate = ota.get("rate") or "N/A"
-            parts.append(f"  - {src}: {ota_rate}")
+            parts.append(f"  - {src}: {ota_rate} USD")
     return "\n".join(parts)
 
 
@@ -534,7 +561,8 @@ def _handle_pricing_flow(
         context = merge_retrieval_context(routing_payload, decision, None, None)
         safety = evaluate_answer_safety(answer, routing_payload, decision, context)
         follow_up_questions = build_follow_up_questions(
-            routing_payload, decision, context, None, None, answer, chat_history=chat_history,
+            routing_payload, decision, context, None, None, answer,
+            chat_history=chat_history, internal_pricing_found=False,
         )
         trace.extend([_build_context_trace(context), _build_safety_trace(safety)])
         return {
@@ -558,6 +586,11 @@ def _handle_pricing_flow(
             "internal_pricing_found": False,
             "internal_prices": [],
             "ota_results": ota_result.get("results", []),
+            "ota_fetched_at": ota_result.get("fetched_at"),
+            "ota_check_in": ota_result.get("check_in"),
+            "ota_check_out": ota_result.get("check_out"),
+            "ota_date_warnings": ota_result.get("date_warnings") or [],
+            "ota_name_warnings": ota_result.get("name_warnings") or [],
             "confirmation_prompt": False,
             "original_query": query,
         }
@@ -579,7 +612,8 @@ def _handle_pricing_flow(
         context = merge_retrieval_context(routing_payload, decision, sql_result, None)
         safety = evaluate_answer_safety(answer, routing_payload, decision, context)
         follow_up_questions = build_follow_up_questions(
-            routing_payload, decision, context, sql_result, None, answer, chat_history=chat_history,
+            routing_payload, decision, context, sql_result, None, answer,
+            chat_history=chat_history, internal_pricing_found=True,
         )
         trace.extend([_build_context_trace(context), _build_safety_trace(safety)])
         sources = list({t for t in (sql_result.tables if sql_result else [])})
@@ -604,6 +638,11 @@ def _handle_pricing_flow(
             "internal_pricing_found": True,
             "internal_prices": _json_safe(internal_rows),
             "ota_results": ota_result.get("results", []),
+            "ota_fetched_at": ota_result.get("fetched_at"),
+            "ota_check_in": ota_result.get("check_in"),
+            "ota_check_out": ota_result.get("check_out"),
+            "ota_date_warnings": ota_result.get("date_warnings") or [],
+            "ota_name_warnings": ota_result.get("name_warnings") or [],
             "confirmation_prompt": False,
             "original_query": query,
         }
@@ -616,6 +655,10 @@ def _handle_pricing_flow(
     )
     context = merge_retrieval_context(routing_payload, decision, None, None)
     safety = evaluate_answer_safety(no_data_answer, routing_payload, decision, context)
+    no_data_followups = build_follow_up_questions(
+        routing_payload, decision, context, None, None, no_data_answer,
+        chat_history=chat_history, internal_pricing_found=False,
+    )
     trace.extend([_build_context_trace(context), _build_safety_trace(safety)])
     return {
         "mode": "pricing_confirmation_needed",
@@ -624,7 +667,7 @@ def _handle_pricing_flow(
         "capability_state": "partially_supported",
         "route": _route_payload(decision),
         "answer": no_data_answer,
-        "follow_up_questions": [],
+        "follow_up_questions": no_data_followups,
         "agent_trace": trace,
         "sql_plan": None,
         "knowledge_plan": None,
