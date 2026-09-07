@@ -227,6 +227,21 @@ def search_hotel_prices(
     hotels_list = raw.get("properties") or raw.get("hotels_results") or []
     if hotels_list:
         results = _parse_hotel_results(hotels_list)
+        # Stage 2 — fetch room-level detail for the best-matching hotel
+        best_hotel_raw = _find_best_hotel_raw(hotels_list, property_name)
+        property_token = best_hotel_raw.get("property_token") if best_hotel_raw else None
+        if property_token:
+            detail_raw = _fetch_property_detail(property_token, effective_in, effective_out)
+            if detail_raw:
+                detail_results = _parse_single_hotel(detail_raw)
+                if detail_results:
+                    # Merge room categories from the detail page into the matching result
+                    detail_hotel = detail_results[0]
+                    for r in results:
+                        if _name_tokens(r.get("name") or "") & _name_tokens(detail_hotel.get("name") or ""):
+                            r["room_categories"] = detail_hotel.get("room_categories") or r.get("room_categories") or []
+                            r["ota_prices"] = detail_hotel.get("ota_prices") or r.get("ota_prices") or []
+                            break
     else:
         results = _parse_single_hotel(raw)
 
@@ -252,8 +267,160 @@ def search_hotel_prices(
 
 
 # ---------------------------------------------------------------------------
+# Stage-2 helpers — property detail fetch
+# ---------------------------------------------------------------------------
+
+def _find_best_hotel_raw(hotels_list: list[Any], queried_name: str) -> dict[str, Any] | None:
+    """Return the hotel dict from the list whose name best matches `queried_name`."""
+    best: dict[str, Any] | None = None
+    best_score = -1.0
+    qt = _name_tokens(queried_name)
+    for hotel in hotels_list[:5]:
+        if not isinstance(hotel, dict):
+            continue
+        name = hotel.get("name") or ""
+        rt = _name_tokens(name)
+        if not qt or not rt:
+            if best is None:
+                best = hotel
+            continue
+        score = len(qt & rt) / max(len(qt), len(rt))
+        if score > best_score:
+            best_score = score
+            best = hotel
+    return best
+
+
+def _fetch_property_detail(
+    property_token: str,
+    check_in: str,
+    check_out: str,
+) -> dict[str, Any] | None:
+    """Call SerpAPI Google Hotels property-detail endpoint for a specific token.
+
+    Returns the raw dict or None on failure.
+    Room-type pricing lives in raw["prices"] on the detail page.
+    """
+    params: dict[str, Any] = {
+        "engine": "google_hotels",
+        "property_token": property_token,
+        "api_key": _serpapi_key(),
+        "gl": "us",
+        "hl": "en",
+        "currency": "USD",
+        "check_in_date": check_in,
+        "check_out_date": check_out,
+    }
+    try:
+        from serpapi import GoogleSearch  # type: ignore[import]
+        raw = GoogleSearch(params).get_dict()
+        if raw.get("error"):
+            logger.warning("web_search: property detail fetch failed: %s", raw["error"])
+            return None
+        return raw
+    except Exception as exc:
+        logger.warning("web_search: property detail exception: %s", exc)
+        return None
+
+
+# ---------------------------------------------------------------------------
 # Parsers
 # ---------------------------------------------------------------------------
+
+def _extract_room_categories(prices: list[Any]) -> list[dict[str, Any]]:
+    """Group SerpAPI price entries by room_type to build a room category breakdown.
+
+    Each category entry:
+        room_type   - str  (e.g. "Deluxe Room", "Junior Suite")
+        lowest_rate - str  (cheapest rate across OTAs for this room)
+        offers      - list of {source, rate, total_rate, link, num_guests}
+    """
+    from collections import defaultdict
+
+    bucket: dict[str, list[dict[str, Any]]] = defaultdict(list)
+
+    for item in prices:
+        if not isinstance(item, dict):
+            continue
+        room_type = (
+            item.get("room_type")
+            or item.get("type")
+            or item.get("room_name")
+            or item.get("description")
+            or ""
+        ).strip()
+        # Use internal sentinel when no room type is provided by the API.
+        # "__unknown__" is filtered out at the end so the UI can show
+        # a flat fallback list instead of a misleading "Standard Room" label.
+        if not room_type:
+            room_type = "__unknown__"
+
+        rpn = item.get("rate_per_night")
+        rate_str = ""
+        if isinstance(rpn, dict):
+            rate_str = rpn.get("lowest") or rpn.get("before_taxes_fees") or ""
+        elif isinstance(rpn, (str, int, float)):
+            rate_str = str(rpn)
+
+        tr = item.get("total_rate")
+        total_str = ""
+        if isinstance(tr, dict):
+            total_str = tr.get("lowest") or tr.get("before_taxes_fees") or ""
+        elif isinstance(tr, (str, int, float)):
+            total_str = str(tr)
+
+        bucket[room_type].append({
+            "source": item.get("source") or "OTA",
+            "rate": rate_str,
+            "total_rate": total_str,
+            "link": item.get("link") or "",
+            "num_guests": item.get("num_guests") or item.get("guests"),
+        })
+
+    categories: list[dict[str, Any]] = []
+    for room_type, offers in bucket.items():
+        # Find the lowest numeric rate for sorting / headline display
+        numeric_rates = []
+        for o in offers:
+            raw_rate = re.sub(r"[^\d.]", "", o["rate"])
+            try:
+                numeric_rates.append(float(raw_rate))
+            except ValueError:
+                pass
+        lowest = f"${min(numeric_rates):.0f}" if numeric_rates else (offers[0]["rate"] if offers else "N/A")
+
+        categories.append({
+            "room_type": room_type,
+            "lowest_rate": lowest,
+            "currency": "USD",
+            "offers": offers[:8],
+        })
+
+    # Sort: named suites/deluxe last, standard first; then by numeric lowest rate
+    def _sort_key(cat: dict[str, Any]) -> tuple[int, float]:
+        tier_order = 0
+        rt = cat["room_type"].lower()
+        if any(w in rt for w in ("suite", "penthouse", "presidential")):
+            tier_order = 3
+        elif any(w in rt for w in ("deluxe", "premium", "superior", "executive")):
+            tier_order = 2
+        elif any(w in rt for w in ("junior", "club", "grand")):
+            tier_order = 1
+        raw = re.sub(r"[^\d.]", "", cat["lowest_rate"])
+        try:
+            price = float(raw)
+        except ValueError:
+            price = 9999.0
+        return (tier_order, price)
+
+    categories.sort(key=_sort_key)
+
+    # If every category is the sentinel (API returned no room_type at all),
+    # return an empty list so the UI can show a plain flat OTA price list
+    # instead of a misleading "Standard Room" heading.
+    real_categories = [c for c in categories if c["room_type"] != "__unknown__"]
+    return real_categories
+
 
 def _parse_single_hotel(raw: dict[str, Any]) -> list[dict[str, Any]]:
     """Parse a SerpAPI single-hotel detail page."""
@@ -269,8 +436,9 @@ def _parse_single_hotel(raw: dict[str, Any]) -> list[dict[str, Any]]:
     check_in_time = raw.get("check_in_time") or ""
     check_out_time = raw.get("check_out_time") or ""
 
-    ota_prices: list[dict[str, str]] = []
-    for item in (raw.get("prices") or [])[:8]:
+    prices_raw = raw.get("prices") or []
+    ota_prices: list[dict[str, Any]] = []
+    for item in prices_raw[:10]:
         if not isinstance(item, dict):
             continue
         rpn = item.get("rate_per_night")
@@ -282,8 +450,12 @@ def _parse_single_hotel(raw: dict[str, Any]) -> list[dict[str, Any]]:
             "source": item.get("source") or "OTA",
             "rate": rate_str,
             "link": item.get("link") or "",
-            "currency": "USD",  # Guardrail 4 — explicit currency label
+            "currency": "USD",
+            "room_type": item.get("room_type") or "",
+            "num_guests": item.get("num_guests"),
         })
+
+    room_categories = _extract_room_categories(prices_raw)
 
     return [{
         "name": name,
@@ -295,7 +467,8 @@ def _parse_single_hotel(raw: dict[str, Any]) -> list[dict[str, Any]]:
         "check_out_time": check_out_time,
         "link": link,
         "ota_prices": ota_prices,
-        "currency": "USD",  # Guardrail 4
+        "room_categories": room_categories,
+        "currency": "USD",
     }]
 
 
@@ -314,7 +487,9 @@ def _parse_hotel_results(hotels: list[Any]) -> list[dict[str, Any]]:
         reviews = hotel.get("reviews") or hotel.get("review_count")
         check_in_time = hotel.get("check_in_time") or ""
         check_out_time = hotel.get("check_out_time") or ""
+        prices_raw = hotel.get("prices") or hotel.get("deal_prices") or []
         ota_prices = _extract_ota_prices(hotel)
+        room_categories = _extract_room_categories(prices_raw)
 
         results.append({
             "name": name,
@@ -326,7 +501,8 @@ def _parse_hotel_results(hotels: list[Any]) -> list[dict[str, Any]]:
             "check_out_time": check_out_time,
             "link": link,
             "ota_prices": ota_prices,
-            "currency": "USD",  # Guardrail 4
+            "room_categories": room_categories,
+            "currency": "USD",
         })
     return results
 
@@ -349,10 +525,10 @@ def _extract_total_rate(hotel: dict[str, Any]) -> str | None:
     return None
 
 
-def _extract_ota_prices(hotel: dict[str, Any]) -> list[dict[str, str]]:
+def _extract_ota_prices(hotel: dict[str, Any]) -> list[dict[str, Any]]:
     prices = hotel.get("prices") or hotel.get("deal_prices") or []
-    ota: list[dict[str, str]] = []
-    for item in prices[:6]:
+    ota: list[dict[str, Any]] = []
+    for item in prices[:10]:
         if not isinstance(item, dict):
             continue
         rpn = item.get("rate_per_night")
@@ -364,7 +540,9 @@ def _extract_ota_prices(hotel: dict[str, Any]) -> list[dict[str, str]]:
             "source": item.get("source") or item.get("provider") or "OTA",
             "rate": rate_str,
             "link": item.get("link") or item.get("url") or "",
-            "currency": "USD",  # Guardrail 4
+            "currency": "USD",
+            "room_type": item.get("room_type") or "",
+            "num_guests": item.get("num_guests"),
         })
     return ota
 

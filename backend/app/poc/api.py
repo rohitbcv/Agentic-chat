@@ -525,14 +525,24 @@ def _format_ota_answer(ota_result: dict[str, Any]) -> str:
         rate = r.get("rate_per_night") or r.get("total_rate") or "N/A"
         rating = r.get("rating")
         ota_prices = r.get("ota_prices") or []
-        line = f"- **{name}** — {rate}/night (USD)"
+        room_categories = r.get("room_categories") or []
+        line = f"- **{name}** — from {rate}/night (USD)"
         if rating:
             line += f" | ★ {rating}"
         parts.append(line)
-        for ota in ota_prices[:3]:
-            src = ota.get("source") or "OTA"
-            ota_rate = ota.get("rate") or "N/A"
-            parts.append(f"  - {src}: {ota_rate} USD")
+
+        if room_categories:
+            parts.append("  *Room categories available:*")
+            for cat in room_categories[:6]:
+                parts.append(f"  - **{cat['room_type']}**: from {cat['lowest_rate']} USD/night")
+                for offer in cat["offers"][:3]:
+                    if offer.get("rate"):
+                        parts.append(f"    · {offer['source']}: {offer['rate']} USD")
+        else:
+            for ota in ota_prices[:3]:
+                src = ota.get("source") or "OTA"
+                ota_rate = ota.get("rate") or "N/A"
+                parts.append(f"  - {src}: {ota_rate} USD")
     return "\n".join(parts)
 
 

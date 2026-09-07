@@ -14,6 +14,13 @@ const initialMessage = {
     "Ask a structured DB question or a grounded property question. I will route it through the read-only agent system and answer only from approved data.",
 };
 
+const IconSend = () => (
+  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <line x1="22" y1="2" x2="11" y2="13" /><polygon points="22 2 15 22 11 13 2 9 22 2" />
+  </svg>
+);
+
+
 export default function App() {
   const [config, setConfig] = useState(null);
   const [messages, setMessages] = useState([initialMessage]);
@@ -24,51 +31,37 @@ export default function App() {
   const [isSending, setIsSending] = useState(false);
   const [lastResponse, setLastResponse] = useState(null);
   const [error, setError] = useState("");
+  const [leftTab, setLeftTab] = useState("samples");
   const messageListRef = useRef(null);
 
   useEffect(() => {
     let ignore = false;
-
     async function loadConfig() {
       try {
         const response = await fetch(apiUrl("/api/agent-poc/config"));
-        if (!response.ok) {
-          throw new Error(`Config request failed with ${response.status}`);
-        }
+        if (!response.ok) throw new Error(`Config request failed with ${response.status}`);
         const data = await response.json();
-        if (!ignore) {
-          setConfig(data);
-        }
+        if (!ignore) setConfig(data);
       } catch (err) {
-        if (!ignore) {
-          setError(err.message || "Could not load POC config.");
-        }
+        if (!ignore) setError(err.message || "Could not load POC config.");
       }
     }
-
     loadConfig();
-    return () => {
-      ignore = true;
-    };
+    return () => { ignore = true; };
   }, []);
 
-  const selectedClient = useMemo(() => {
-    return (config?.clients || []).find((client) => String(client.id) === String(selectedClientId));
-  }, [config, selectedClientId]);
+  const selectedClient = useMemo(
+    () => (config?.clients || []).find((c) => String(c.id) === String(selectedClientId)),
+    [config, selectedClientId]
+  );
 
   useEffect(() => {
     const list = messageListRef.current;
     if (!list) return;
-    list.scrollTo({
-      top: list.scrollHeight,
-      behavior: "smooth",
-    });
+    list.scrollTo({ top: list.scrollHeight, behavior: "smooth" });
   }, [messages.length, isSending]);
 
-  // Effective client: explicit dropdown > auto-inferred session > none
-  const effectiveClientId = selectedClientId
-    ? Number(selectedClientId)
-    : (sessionClientId || null);
+  const effectiveClientId = selectedClientId ? Number(selectedClientId) : (sessionClientId || null);
 
   function clearSessionContext() {
     setSessionClientId(null);
@@ -80,10 +73,7 @@ export default function App() {
     if (!query || isSending) return;
     const requestHistory = [...messages, { role: "user", content: query }]
       .slice(-12)
-      .map((message) => ({
-        role: message.role,
-        content: message.content,
-      }));
+      .map((m) => ({ role: m.role, content: m.content }));
 
     setError("");
     setMessages((current) => [...current, { role: "user", content: query }]);
@@ -107,25 +97,16 @@ export default function App() {
         let message = `Agent request failed with ${response.status}`;
         try {
           const errorBody = await response.json();
-          if (errorBody?.message) {
-            message = errorBody.message;
-          }
-        } catch {
-          // Keep the default message if the error body is not JSON.
-        }
+          if (errorBody?.message) message = errorBody.message;
+        } catch { /* keep default */ }
         throw new Error(message);
       }
 
       const data = await response.json();
       setLastResponse(data);
 
-      // Persist (or switch) the session client whenever the backend resolves one.
-      // This covers: first mention, switching to a new client mid-chat, or the
-      // user typing a client name even when a session client is already active.
       if (data.client_id && !selectedClientId) {
-        const resolvedClient = (config?.clients || []).find(
-          (c) => Number(c.id) === Number(data.client_id)
-        );
+        const resolvedClient = (config?.clients || []).find((c) => Number(c.id) === Number(data.client_id));
         const resolvedId = Number(data.client_id);
         if (resolvedId !== sessionClientId) {
           setSessionClientId(resolvedId);
@@ -165,287 +146,230 @@ export default function App() {
     }
   }
 
-  return (
-    <div className="studioShell">
-      <div className="studioBackdrop" />
+  // ── Left panel tab content ────────────────────────────────────────────────
+  const LEFT_TABS = [
+    { id: "samples",    label: "Samples" },
+    { id: "validation", label: "Validation" },
+    { id: "pricing",    label: "Pricing" },
+    { id: "agents",     label: "Agents" },
+  ];
 
-      <aside className="leftRail">
-        <section className="railCard railCard--scope">
-          <div className="panelTitleRow">
-            <div>
-              <p className="eyebrow">Control Plane</p>
-              <h2>Client Scope</h2>
-            </div>
-            <span className="pillStatus">Scoped</span>
+  return (
+    <div className="appShell">
+
+      {/* ── Left panel ── */}
+      <aside className="leftPanel">
+        {/* Client scope header */}
+        <div className="leftPanelHeader">
+          <div className="leftPanelTitle">
+            <span className="leftPanelEyebrow">Control Plane</span>
+            <h2>Client Scope</h2>
           </div>
-          <label className="fieldLabel" htmlFor="clientSelect">
-            Client context
-          </label>
+          <span className={`statusPill ${isSending ? "statusPill--busy" : "statusPill--ready"}`}>
+            {isSending ? "Working…" : "Ready"}
+          </span>
+        </div>
+
+        <div className="clientScopeBox">
+          <label className="fieldLabel" htmlFor="clientSelect">Client context</label>
           <select
             id="clientSelect"
             className="clientSelect"
             value={selectedClientId}
-            onChange={(event) => {
-              setSelectedClientId(event.target.value);
-              // Selecting a client explicitly from the dropdown clears the auto-inferred session
-              if (event.target.value) {
-                setSessionClientId(null);
-                setSessionClientName(null);
-              }
+            onChange={(e) => {
+              setSelectedClientId(e.target.value);
+              if (e.target.value) { setSessionClientId(null); setSessionClientName(null); }
             }}
           >
             <option value="">Auto-detect from query</option>
             {(config?.clients || []).map((client) => (
-              <option key={client.id} value={client.id}>
-                {client.name}
-              </option>
+              <option key={client.id} value={client.id}>{client.name}</option>
             ))}
           </select>
           {selectedClient ? (
-            <p className="selectedClientMeta">
-              {selectedClient.city} · {selectedClient.domain}
-            </p>
+            <p className="clientMeta">{selectedClient.city} · {selectedClient.domain}</p>
+          ) : sessionClientId ? (
+            <div className="sessionChip">
+              <span className="sessionDot" />
+              <span className="sessionName">{sessionClientName}</span>
+              <button className="sessionClear" onClick={clearSessionContext} type="button">×</button>
+            </div>
           ) : (
-            <p className="mutedCopy">
-              Leave blank for auto-detection. The Orchestrator will infer the
-              property when the query includes a recognizable name or client ID.
-            </p>
+            <p className="mutedNote">Auto-detects hotel from query text or client ID.</p>
           )}
-        </section>
+        </div>
 
-        <section className="railCard railCard--samples">
-          <div className="panelTitleRow">
-            <div>
-              <p className="eyebrow">Command Palette</p>
-              <h2>Sample Questions</h2>
-            </div>
-          </div>
-          <div className="chipStack">
-            {(config?.sample_queries || []).map((query) => (
-              <button
-                className="sampleChip"
-                key={query}
-                type="button"
-                onClick={() => runQuery(query)}
-              >
-                {query}
-              </button>
-            ))}
-          </div>
-        </section>
+        {/* Tab bar */}
+        <div className="leftTabBar">
+          {LEFT_TABS.map((t) => (
+            <button
+              key={t.id}
+              className={`leftTab ${leftTab === t.id ? "leftTab--active" : ""}`}
+              onClick={() => setLeftTab(t.id)}
+              type="button"
+            >
+              {t.label}
+            </button>
+          ))}
+        </div>
 
-        <section className="railCard railCard--validation">
-          <div className="panelTitleRow">
-            <div>
-              <p className="eyebrow">Validation Probe</p>
-              <h2>Validation Tests</h2>
-            </div>
-            <span className="pillStatus pillStatus--validation">10 probes</span>
-          </div>
-          <p className="mutedCopy validationRailNote">
-            Each probe targets a specific validation check. The Agent Run Card on the answer will show which stage caught it.
-          </p>
-          <div className="chipStack validationChipStack">
-            {(config?.validation_sample_queries || []).map((item) => (
-              <button
-                className="validationChip"
-                key={item.query}
-                type="button"
-                onClick={() => runQuery(item.query)}
-              >
-                <span className="validationChipLabel">{item.label}</span>
-                <span className="validationChipQuery">{item.query}</span>
-                <span className="validationChipChecks">{item.checks}</span>
-              </button>
-            ))}
-          </div>
-        </section>
-
-        {(config?.pricing_sample_queries || []).length ? (
-          <section className="railCard railCard--pricing">
-            <div className="panelTitleRow">
-              <div>
-                <p className="eyebrow">Booking Price Agent</p>
-                <h2>Pricing Tests</h2>
-              </div>
-              <span className="pillStatus pillStatus--pricing">{config.pricing_sample_queries.length} probes</span>
-            </div>
-            <p className="mutedCopy validationRailNote">
-              Tests the internal pricing check + OTA confirmation flow.
-            </p>
-            <div className="chipStack validationChipStack">
-              {config.pricing_sample_queries.map((item) => (
-                <button
-                  className="validationChip pricingChip"
-                  key={item.query}
-                  type="button"
-                  onClick={() => runQuery(item.query)}
-                >
-                  <span className="validationChipLabel">{item.label}</span>
-                  <span className="validationChipQuery">{item.query}</span>
-                  {item.checks ? <span className="validationChipChecks">{item.checks}</span> : null}
+        {/* Tab content */}
+        <div className="leftTabContent">
+          {leftTab === "samples" && (
+            <div className="chipList">
+              {(config?.sample_queries || []).map((q) => (
+                <button className="queryChip" key={q} type="button" onClick={() => runQuery(q)}>
+                  {q}
                 </button>
               ))}
             </div>
-          </section>
-        ) : null}
+          )}
 
-        <section className="railCard">
-          <div className="panelTitleRow">
-            <div>
-              <p className="eyebrow">Specialists</p>
-              <h2>Agent Bench</h2>
+          {leftTab === "validation" && (
+            <div className="probeList">
+              <p className="probeNote">Each probe targets a specific validation stage.</p>
+              {(config?.validation_sample_queries || []).map((item) => (
+                <button className="probeCard" key={item.query} type="button" onClick={() => runQuery(item.query)}>
+                  <span className="probeLabel">{item.label}</span>
+                  <span className="probeQuery">{item.query}</span>
+                  {item.checks ? <span className="probeChecks">{item.checks}</span> : null}
+                </button>
+              ))}
             </div>
-          </div>
-          <div className="agentGrid">
-            {(config?.agents || []).map((agent) => (
-              <AgentSummaryCard agent={agent} key={agent.name} />
-            ))}
-          </div>
-        </section>
+          )}
+
+          {leftTab === "pricing" && (
+            <div className="probeList">
+              <p className="probeNote">Tests internal pricing + OTA confirmation flow.</p>
+              {(config?.pricing_sample_queries || []).map((item) => (
+                <button className="probeCard probeCard--pricing" key={item.query} type="button" onClick={() => runQuery(item.query)}>
+                  <span className="probeLabel">{item.label}</span>
+                  <span className="probeQuery">{item.query}</span>
+                  {item.checks ? <span className="probeChecks">{item.checks}</span> : null}
+                </button>
+              ))}
+            </div>
+          )}
+
+          {leftTab === "agents" && (
+            <div className="agentCardList">
+              {(config?.agents || []).map((agent) => (
+                <AgentSummaryCard agent={agent} key={agent.name} />
+              ))}
+            </div>
+          )}
+        </div>
       </aside>
 
-      <main className="conversationStage">
-        <section className="chatCard">
-          <div className="chatHeader">
-            <div>
-              <p className="eyebrow">Analyst Console</p>
-              <h3>Ask anything the DB can prove</h3>
-            </div>
-            <span className={`runState ${isSending ? "runState--busy" : ""}`}>
-              {isSending ? "Agents working..." : "Ready"}
+      {/* ── Main chat panel ── */}
+      <main className="mainPanel">
+        {/* Top bar */}
+        <div className="mainTopBar">
+          <div className="mainTopBarLeft">
+            <span className="mainTopBarEyebrow">Analyst Console</span>
+            <h3 className="mainTopBarTitle">Smart Community Inbox: Ask Anything, Get Answers</h3>
+          </div>
+          <div className="mainTopBarRight">
+            {sessionClientId && !selectedClientId ? (
+              <span className="sessionBadge">
+                <span className="sessionDot" /> {sessionClientName}
+              </span>
+            ) : selectedClient ? (
+              <span className="sessionBadge sessionBadge--selected">
+                {selectedClient.name}
+              </span>
+            ) : null}
+            <span className={`statusPill ${isSending ? "statusPill--busy" : "statusPill--ready"}`}>
+              {isSending ? "Agents working…" : "Ready"}
             </span>
           </div>
+        </div>
 
-          {/* Session context banner — shown when a client was auto-inferred and no dropdown selection is active */}
-          {!selectedClientId && sessionClientId ? (
-            <div className="sessionContextBanner">
-              <div className="sessionContextLeft">
-                <span className="sessionContextDot" />
-                <div>
-                  <p className="sessionContextLabel">Session Context</p>
-                  <strong className="sessionContextName">{sessionClientName}</strong>
-                </div>
+        {/* Message list */}
+        <div className="messageList" ref={messageListRef}>
+          {messages.map((message, index) => (
+            <article
+              key={`${message.role}-${index}`}
+              className={`msgRow ${message.role === "user" ? "msgRow--user" : "msgRow--assistant"}`}
+            >
+              <div className="msgAvatar">
+                {message.role === "user" ? "You" : "AI"}
               </div>
-              <div className="sessionContextRight">
-                <span className="sessionContextHint">
-                  Follow-up questions will use this client automatically
-                </span>
-                <button
-                  className="sessionContextClear"
-                  type="button"
-                  onClick={clearSessionContext}
-                  title="Clear session context"
-                >
-                  Clear ×
-                </button>
-              </div>
-            </div>
-          ) : null}
 
-          <div className="messageList" ref={messageListRef}>
-            {messages.map((message, index) => (
-              <article
-                className={`messageBubble ${
-                  message.role === "user" ? "messageBubble--user" : "messageBubble--assistant"
-                }`}
-                key={`${message.role}-${index}`}
-              >
-                <div className="messageMeta">
-                  <span>{message.role === "user" ? "You" : "Assistant"}</span>
-                </div>
-
+              <div className="msgBody">
+                {/* Agent run card */}
                 {message.agentName ? (
-                  <div className="agentRunCard">
-                    <div className="agentRunHeader">
-                      <div className="agentRunIdentity">
-                        <span className="agentRunDot" />
+                  <div className="agentCard">
+                    <div className="agentCardHeader">
+                      <div className="agentCardLeft">
+                        <span className="agentDot" />
                         <div>
-                          <p className="agentRunLabel">Agent Called</p>
-                          <strong className="agentRunName">{message.agentName}</strong>
+                          <p className="agentCardEyebrow">Agent Called</p>
+                          <strong className="agentCardName">{message.agentName}</strong>
                           {message.capability ? (
-                            <span className="agentRunCapability">{message.capability.replace(/_/g, " ")}</span>
+                            <span className="capabilityTag">
+                              {message.capability.replace(/_/g, " ")}
+                            </span>
                           ) : null}
                         </div>
                       </div>
-                      <div className="agentRunValidations">
+                      <div className="validationBadges">
                         {message.decisionValidation ? (
-                          <div className={`validationBadge validationBadge--${message.decisionValidation.status}`}>
-                            <span className="validationBadgeIcon">
-                              {message.decisionValidation.passed ? "✓" : message.decisionValidation.status === "warning" ? "⚠" : "✗"}
-                            </span>
-                            <div>
-                              <p className="validationBadgeStage">Decision Check</p>
-                              <strong className="validationBadgeStatus">{message.decisionValidation.status}</strong>
-                            </div>
-                          </div>
+                          <span className={`valBadge valBadge--${message.decisionValidation.status}`}>
+                            {message.decisionValidation.passed ? "✓" : message.decisionValidation.status === "warning" ? "⚠" : "✗"}{" "}
+                            Decision
+                          </span>
                         ) : null}
                         {message.evidenceValidation ? (
-                          <div className={`validationBadge validationBadge--${message.evidenceValidation.status}`}>
-                            <span className="validationBadgeIcon">
-                              {message.evidenceValidation.passed ? "✓" : message.evidenceValidation.status === "warning" ? "⚠" : "✗"}
-                            </span>
-                            <div>
-                              <p className="validationBadgeStage">Evidence Check</p>
-                              <strong className="validationBadgeStatus">{message.evidenceValidation.status}</strong>
-                            </div>
-                          </div>
+                          <span className={`valBadge valBadge--${message.evidenceValidation.status}`}>
+                            {message.evidenceValidation.passed ? "✓" : message.evidenceValidation.status === "warning" ? "⚠" : "✗"}{" "}
+                            Evidence
+                          </span>
                         ) : null}
                       </div>
                     </div>
 
-                    {/* Blocking issues from either stage */}
+                    {/* Blocking issues */}
                     {[
                       ...(message.decisionValidation?.blocking_issues || []),
                       ...(message.evidenceValidation?.blocking_issues || []),
-                    ].length ? (
-                      <div className="agentRunIssues">
-                        {[
-                          ...(message.decisionValidation?.blocking_issues || []),
-                          ...(message.evidenceValidation?.blocking_issues || []),
-                        ].map((issue, i) => (
-                          <p key={i} className="agentRunIssue agentRunIssue--blocking">✗ {issue}</p>
-                        ))}
-                      </div>
-                    ) : null}
+                    ].map((issue, i) => (
+                      <p key={i} className="agentIssue agentIssue--block">✗ {issue}</p>
+                    ))}
 
-                    {/* Warnings from either stage (only if no blocking) */}
+                    {/* Warnings */}
                     {![...(message.decisionValidation?.blocking_issues || []), ...(message.evidenceValidation?.blocking_issues || [])].length &&
-                    [...(message.decisionValidation?.warnings || []), ...(message.evidenceValidation?.warnings || [])].length ? (
-                      <div className="agentRunIssues">
-                        {[
-                          ...(message.decisionValidation?.warnings || []),
-                          ...(message.evidenceValidation?.warnings || []),
-                        ].slice(0, 3).map((w, i) => (
-                          <p key={i} className="agentRunIssue agentRunIssue--warning">⚠ {w}</p>
-                        ))}
-                      </div>
-                    ) : null}
+                      [...(message.decisionValidation?.warnings || []), ...(message.evidenceValidation?.warnings || [])].slice(0, 3).map((w, i) => (
+                        <p key={i} className="agentIssue agentIssue--warn">⚠ {w}</p>
+                      ))
+                    }
                   </div>
                 ) : null}
 
-                <p style={{ whiteSpace: "pre-wrap" }}>{message.content}</p>
+                {/* Message text */}
+                <div className="msgContent">
+                  <p style={{ whiteSpace: "pre-wrap", margin: 0 }}>{message.content}</p>
+                </div>
 
-                {/* OTA confirmation YES/NO buttons */}
+                {/* OTA confirmation */}
                 {message.confirmationPrompt ? (
-                  <div className="otaConfirmation">
+                  <div className="otaConfirmRow">
+                    <span className="otaConfirmLabel">Check OTA platforms for live prices?</span>
                     <button
-                      className="otaConfirmBtn otaConfirmBtn--yes"
+                      className="btnPrimary"
                       disabled={isSending}
                       type="button"
                       onClick={() => runQuery(message.originalQuery, { confirmOta: true })}
                     >
-                      Yes, check OTA prices
+                      Yes, search OTA
                     </button>
                     <button
-                      className="otaConfirmBtn otaConfirmBtn--no"
+                      className="btnGhost"
                       disabled={isSending}
                       type="button"
                       onClick={() =>
-                        setMessages((current) =>
-                          current.map((m) =>
-                            m === message ? { ...m, confirmationPrompt: false } : m
-                          )
+                        setMessages((curr) =>
+                          curr.map((m) => (m === message ? { ...m, confirmationPrompt: false } : m))
                         )
                       }
                     >
@@ -454,149 +378,202 @@ export default function App() {
                   </div>
                 ) : null}
 
-                {/* OTA price comparison card */}
+                {/* OTA results card */}
                 {message.otaResults?.length ? (
-                  <div className="otaResultsCard">
-                    <div className="otaResultsHeader">
-                      <span className="otaResultsIcon">🌐</span>
-                      <span className="otaResultsTitle">Live OTA Prices</span>
-                      <span className="otaResultsBadge">SerpAPI · Google Hotels · USD</span>
+                  <div className="otaCard">
+                    <div className="otaCardHeader">
+                      <span className="otaCardIcon">🌐</span>
+                      <span className="otaCardTitle">Live OTA Prices</span>
+                      <span className="otaCardBadge">SerpAPI · Google Hotels · USD</span>
                     </div>
-
-                    {/* Guardrail meta row: dates + freshness */}
-                    <div className="otaMetaRow">
+                    <div className="otaCardMeta">
                       {message.otaCheckIn && message.otaCheckOut ? (
-                        <span className="otaMetaDates">
-                          📅 {message.otaCheckIn} → {message.otaCheckOut}
-                        </span>
+                        <span>📅 {message.otaCheckIn} → {message.otaCheckOut}</span>
                       ) : null}
                       {message.otaFetchedAt ? (
-                        <span className="otaFreshness">
-                          🕐 Fetched {message.otaFetchedAt.slice(0, 16).replace("T", " ")} UTC
-                        </span>
+                        <span>🕐 {message.otaFetchedAt.slice(0, 16).replace("T", " ")} UTC</span>
                       ) : null}
                     </div>
-
-                    {/* Guardrail warnings */}
                     {[...(message.otaDateWarnings || []), ...(message.otaNameWarnings || [])].map((w, i) => (
                       <div className="otaWarning" key={i}>⚠ {w}</div>
                     ))}
-
                     <div className="otaResultsList">
                       {message.otaResults.map((r, i) => (
                         <div className="otaResultRow" key={i}>
-                          <div className="otaResultName">{r.name}</div>
-                          <div className="otaResultMeta">
-                            {r.rate_per_night ? (
-                              <span className="otaResultRate">{r.rate_per_night}/night USD</span>
-                            ) : null}
-                            {r.rating ? (
-                              <span className="otaResultRating">★ {r.rating}</span>
+                          {/* Hotel header */}
+                          <div className="otaResultHeader">
+                            <div className="otaResultName">{r.name}</div>
+                            <div className="otaResultMeta">
+                              {r.rate_per_night ? <span className="otaRate">from {r.rate_per_night}/night USD</span> : null}
+                              {r.rating ? <span className="otaRating">★ {r.rating}</span> : null}
+                              {r.reviews ? <span className="otaReviews">{r.reviews} reviews</span> : null}
+                            </div>
+                            {(r.check_in_time || r.check_out_time) ? (
+                              <div className="otaCheckTimes">
+                                {r.check_in_time ? <span>Check-in: {r.check_in_time}</span> : null}
+                                {r.check_out_time ? <span>Check-out: {r.check_out_time}</span> : null}
+                              </div>
                             ) : null}
                           </div>
-                          {r.ota_prices?.length ? (
-                            <div className="otaSubPrices">
+
+                          {/* Room categories — shown only when SerpAPI returned real room_type data */}
+                          {r.room_categories?.length ? (
+                            <div className="roomCategories">
+                              <div className="roomCategoriesTitle">Available Room Types</div>
+                              <div className="roomCategoriesGrid">
+                                {r.room_categories.map((cat, ci) => (
+                                  <div className="roomCategoryCard" key={ci}>
+                                    <div className="roomCategoryHeader">
+                                      <span className="roomCategoryName">{cat.room_type}</span>
+                                      <span className="roomCategoryLowest">from {cat.lowest_rate} USD/night</span>
+                                    </div>
+                                    {cat.offers?.length ? (
+                                      <div className="roomCategoryOffers">
+                                        {cat.offers.map((offer, oi) => (
+                                          <div className="roomCategoryOffer" key={oi}>
+                                            <span className="roomOfferSource">{offer.source}</span>
+                                            {offer.num_guests ? (
+                                              <span className="roomOfferGuests">{offer.num_guests} guest{offer.num_guests > 1 ? "s" : ""}</span>
+                                            ) : null}
+                                            <span className="roomOfferRate">{offer.rate || "N/A"} USD</span>
+                                            {offer.link ? (
+                                              <a className="roomOfferLink" href={offer.link} target="_blank" rel="noopener noreferrer">Book</a>
+                                            ) : null}
+                                          </div>
+                                        ))}
+                                      </div>
+                                    ) : null}
+                                  </div>
+                                ))}
+                              </div>
+                            </div>
+                          ) : r.ota_prices?.length ? (
+                            /* Flat OTA list — shown when SerpAPI does not return room_type breakdown.
+                               Google Hotels exposes only the cheapest available room per platform. */
+                            <div className="otaFlatList">
+                              <div className="otaFlatNote">
+                                Prices below are the lowest available room per platform
+                              </div>
                               {r.ota_prices.map((p, j) => (
-                                <span className="otaSubPrice" key={j}>
-                                  {p.source}: {p.rate} USD
-                                </span>
+                                <div className="roomCategoryOffer" key={j}>
+                                  <span className="roomOfferSource">{p.source}</span>
+                                  {p.num_guests ? (
+                                    <span className="roomOfferGuests">{p.num_guests} guest{p.num_guests > 1 ? "s" : ""}</span>
+                                  ) : null}
+                                  <span className="roomOfferRate">{p.rate || "N/A"} USD</span>
+                                  {p.link ? (
+                                    <a className="roomOfferLink" href={p.link} target="_blank" rel="noopener noreferrer">Book</a>
+                                  ) : null}
+                                </div>
                               ))}
                             </div>
                           ) : null}
+
                           {r.link ? (
-                            <a className="otaResultLink" href={r.link} target="_blank" rel="noopener noreferrer">
-                              View on OTA →
+                            <a className="otaLink" href={r.link} target="_blank" rel="noopener noreferrer">
+                              View full hotel on OTA →
                             </a>
                           ) : null}
                         </div>
                       ))}
                     </div>
-                    <div className="otaCurrencyNote">All prices in USD · External market data, not confirmed internal rates</div>
+                    <div className="otaDisclaimer">All prices in USD · External market data, not confirmed internal rates</div>
                   </div>
                 ) : null}
 
+                {/* Media previews */}
                 {message.mediaPreviews?.length ? (
-                  <div className="mediaPreviewBlock">
-                    <span className="mediaPreviewTitle">Media used</span>
-                    <div className="mediaPreviewGrid">
-                      {message.mediaPreviews.map((media) => (
-                        <article className="mediaPreviewCard" key={`${media.media_id}-${media.name}`}>
-                          <div className="mediaThumb">
-                            {media.thumbnail_url ? (
-                              <img src={media.thumbnail_url} alt={media.alt_text || media.name} />
-                            ) : (
-                              <span>{media.name}</span>
-                            )}
-                          </div>
-                          <div className="mediaPreviewBody">
-                            <strong>{media.name}</strong>
-                            <span>Media ID {media.media_id}</span>
-                            <p>{media.description || media.alt_text}</p>
-                            {media.tags?.length ? (
-                              <div className="mediaTagRow">
-                                {media.tags.slice(0, 4).map((tag) => (
-                                  <em key={tag}>{tag}</em>
-                                ))}
-                              </div>
-                            ) : null}
-                          </div>
-                        </article>
-                      ))}
-                    </div>
+                  <div className="mediaGrid">
+                    {message.mediaPreviews.map((media) => (
+                      <div className="mediaCard" key={`${media.media_id}-${media.name}`}>
+                        <div className="mediaThumb">
+                          {media.thumbnail_url
+                            ? <img src={media.thumbnail_url} alt={media.alt_text || media.name} />
+                            : <span>{media.name}</span>}
+                        </div>
+                        <div className="mediaInfo">
+                          <strong>{media.name}</strong>
+                          <span>ID {media.media_id}</span>
+                          <p>{media.description || media.alt_text}</p>
+                          {media.tags?.length ? (
+                            <div className="mediaTags">
+                              {media.tags.slice(0, 4).map((t) => <em key={t}>{t}</em>)}
+                            </div>
+                          ) : null}
+                        </div>
+                      </div>
+                    ))}
                   </div>
                 ) : null}
+
+                {/* Follow-ups */}
                 {message.followUps?.length ? (
-                  <div className="followupBlock">
-                    <span className="followupTitle">Follow-ups</span>
-                    <div className="followupStack">
-                      {message.followUps.map((question) => (
+                  <div className="followUpRow">
+                    <span className="followUpLabel">Suggested next</span>
+                    <div className="followUpChips">
+                      {message.followUps.map((q) => (
                         <button
-                          className="followupChip"
+                          key={q}
+                          className="followUpChip"
                           disabled={isSending}
-                          key={question}
                           type="button"
-                          onClick={() => runQuery(question)}
+                          onClick={() => runQuery(q)}
                         >
-                          {question}
+                          {q}
                         </button>
                       ))}
                     </div>
                   </div>
                 ) : null}
-              </article>
-            ))}
-          </div>
+              </div>
+            </article>
+          ))}
 
+          {isSending && (
+            <div className="msgRow msgRow--assistant">
+              <div className="msgAvatar">AI</div>
+              <div className="msgBody">
+                <div className="msgContent typingIndicator">
+                  <span /><span /><span />
+                </div>
+              </div>
+            </div>
+          )}
+        </div>
+
+        {/* Error */}
+        {error ? <div className="errorBanner">⚠ {error}</div> : null}
+
+        {/* Composer */}
+        <div className="composer">
           <form
-            className="composer"
-            onSubmit={(event) => {
-              event.preventDefault();
-              runQuery(input);
-            }}
+            className="composerForm"
+            onSubmit={(e) => { e.preventDefault(); runQuery(input); }}
           >
-            <label className="srOnly" htmlFor="queryInput">
-              Ask a question
-            </label>
             <textarea
-              id="queryInput"
               className="composerInput"
-              value={input}
-              onChange={(event) => setInput(event.target.value)}
+              id="queryInput"
               placeholder="Try: Which guest complaints are unresolved for Snow Villa?"
-              rows={4}
+              rows={3}
+              value={input}
+              onChange={(e) => setInput(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); runQuery(input); }
+              }}
             />
-            <div className="composerFooter">
-              <p className="mutedCopy">
-                Read-only only. Answers must be grounded in SQL rows, embeddings, or relationship paths.
-              </p>
-              <button className="sendButton" type="submit" disabled={isSending || !input.trim()}>
-                {isSending ? "Routing..." : "Run Agent Query"}
+            <div className="composerActions">
+              <span className="composerHint">Read-only · Answers grounded in DB only · Shift+Enter for new line</span>
+              <button
+                className="sendBtn"
+                type="submit"
+                disabled={isSending || !input.trim()}
+              >
+                <IconSend />
+                {isSending ? "Routing…" : "Send"}
               </button>
             </div>
           </form>
-
-          {error ? <div className="errorBanner">{error}</div> : null}
-        </section>
+        </div>
       </main>
 
       <TracePanel response={lastResponse} />
