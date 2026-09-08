@@ -120,14 +120,11 @@ def build_follow_up_questions(
     *,
     chat_history: list[dict[str, Any]] | None = None,
     limit: int = 3,
-    internal_pricing_found: bool = True,
 ) -> list[str]:
     """Create deterministic, route-aware follow-up questions for the UI.
 
     Follow-ups are suggestions only. They should point users to supported read-only
     routes and should never imply that a missing fact exists.
-    When internal data is absent (e.g. no pricing rows), follow-ups redirect to
-    capabilities that are more likely to have data for this client.
     """
 
     client_ref = _client_ref(payload)
@@ -244,20 +241,11 @@ def build_follow_up_questions(
                 f"Show complaint threads for {client_ref}",
             ]
     elif capability == "pricing_lookup":
-        if internal_pricing_found:
-            # Pricing data was found — suggest deeper or comparative price questions
-            candidates = [
-                f"Show property details for {client_ref}",
-                f"Show booking policy for {client_ref}",
-                f"What amenities does {client_ref} offer?",
-            ]
-        else:
-            # No pricing data in system — redirect to things the system CAN answer
-            candidates = [
-                f"Show property details for {client_ref}",
-                f"Show FAQs for {client_ref}",
-                f"What is the tone of voice for {client_ref}?",
-            ]
+        candidates = [
+            f"Show price notes for {client_ref}",
+            f"Show booking policy for {client_ref}",
+            f"Show property details for {client_ref}",
+        ]
     else:
         candidates = [
             f"Show more on {topic_ref} for {client_ref}",

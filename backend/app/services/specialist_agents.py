@@ -368,57 +368,6 @@ SPECIALIST_AGENT_CONTRACTS: dict[str, SpecialistAgentContract] = {
             "If competitor data is inferred or sparse, label support as partial.",
         ],
     ),
-    "Booking Price Agent": SpecialistAgentContract(
-        name="Booking Price Agent",
-        purpose="Retrieve booking price and rate information from internal client data (FAQs, property details, notes) and surface OTA prices via web search when authorised.",
-        allowed_retriever_modes=["sql", "vector"],
-        allowed_tables=[
-            "clients.client_notes",
-            "clients.property_details",
-            "clients.client_details",
-            "clients.clients",
-            "clients.client_tone_of_voice_settings",
-            "general.knowledge_embeddings",
-        ],
-        prompt_rules=[
-            "Search client_notes and property_details for any mention of price, rate, tariff, or booking cost.",
-            "Never invent or estimate a price when the source is missing.",
-            "If no internal pricing data exists, explicitly state that and ask whether the user wants OTA prices.",
-            "When internal pricing is found, present it clearly and label it as internal system data.",
-            "When OTA prices are retrieved, present them as external market data, not as confirmed internal rates.",
-        ],
-        task="Check internal sources for booking/room pricing first; if found return it and fetch live OTA prices; if not found inform the user and ask for confirmation before querying OTA.",
-        evidence_priority=[
-            "Use clients.client_notes for FAQ-style pricing or rate entries.",
-            "Use clients.property_details for rate sections such as room types or seasonal pricing.",
-            "Use clients.client_details for general property rate context.",
-            "Use general.knowledge_embeddings only as a semantic fallback over the same approved sources.",
-        ],
-        decision_rules=[
-            "Only surface pricing data that is explicitly present in retrieved rows — no inference.",
-            "If multiple rate rows exist, list them all with source labels.",
-            "Every evidence row must belong to the resolved client_id.",
-            "Never combine pricing from different clients.",
-        ],
-        forbidden_behaviors=[
-            *UNIVERSAL_FORBIDDEN_BEHAVIORS,
-            "Do not estimate, infer, or approximate a room rate from non-pricing data.",
-            "Do not fabricate availability, cancellation policy, or minimum stay from general property knowledge.",
-            "Do not call OTA APIs without explicit user confirmation when internal data is absent.",
-        ],
-        output_contract={
-            **BASE_OUTPUT_CONTRACT,
-            "internal_pricing_found": "boolean — whether any pricing rows exist in the internal system",
-            "internal_prices": "list of internal pricing entries with source and value",
-            "ota_prices": "list of OTA results from web search when triggered",
-            "confirmation_required": "boolean — true when internal data absent and OTA search not yet confirmed",
-        },
-        failure_behavior=[
-            "If client scope is missing, ask which hotel or property to use.",
-            "If no pricing rows are found, say explicitly that no price details are available in the system for this property.",
-            "Never guess a rate based on location, star rating, or general knowledge.",
-        ],
-    ),
 }
 
 
