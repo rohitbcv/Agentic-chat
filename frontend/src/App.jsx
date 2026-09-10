@@ -34,6 +34,14 @@ export default function App() {
   const [leftTab, setLeftTab] = useState("samples");
   const messageListRef = useRef(null);
 
+  // ── Inbox Monitor state ─────────────────────────────────────────────────
+  const [inboxInput, setInboxInput] = useState("");
+  const [inboxResult, setInboxResult] = useState(null);
+  const [inboxSending, setInboxSending] = useState(false);
+  const [inboxError, setInboxError] = useState("");
+  const [opsDecisionSent, setOpsDecisionSent] = useState(false);
+  const [editedReply, setEditedReply] = useState("");
+
   useEffect(() => {
     let ignore = false;
     async function loadConfig() {
@@ -89,7 +97,6 @@ export default function App() {
           client_id: effectiveClientId,
           mode: "read_only",
           history: requestHistory,
-          confirm_ota_search: options.confirmOta === true,
         }),
       });
 
@@ -127,16 +134,6 @@ export default function App() {
           mode: data.mode || null,
           decisionValidation: data.decision_validation || null,
           evidenceValidation: data.evidence_validation || null,
-          confirmationPrompt: data.confirmation_prompt === true,
-          originalQuery: data.original_query || query,
-          otaResults: data.ota_results || [],
-          otaFetchedAt: data.ota_fetched_at || null,
-          otaCheckIn: data.ota_check_in || null,
-          otaCheckOut: data.ota_check_out || null,
-          otaDateWarnings: data.ota_date_warnings || [],
-          otaNameWarnings: data.ota_name_warnings || [],
-          internalPricingFound: data.internal_pricing_found === true,
-          internalPrices: data.internal_prices || [],
         },
       ]);
     } catch (err) {
@@ -146,12 +143,78 @@ export default function App() {
     }
   }
 
-  // ── Left panel tab content ────────────────────────────────────────────────
+  // ── Inbox Monitor: process message ────────────────────────────────────────
+  async function processInboxMessage() {
+    const msg = inboxInput.trim();
+    if (!msg) return;
+    const clientId = sessionClientId || (selectedClientId ? Number(selectedClientId) : null);
+    if (!clientId) {
+      setInboxError("Please select a client first.");
+      return;
+    }
+    setInboxSending(true);
+    setInboxError("");
+    setInboxResult(null);
+    setOpsDecisionSent(false);
+    setEditedReply("");
+    try {
+      const res = await fetch(apiUrl("/api/agent-poc/process-message"), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          message_content: msg,
+          client_id: clientId,
+          message_type: "messages",
+        }),
+      });
+      if (!res.ok) throw new Error(`Request failed: ${res.status}`);
+      const data = await res.json();
+      setInboxResult(data);
+      // Populate editable reply from whichever draft is available
+      setEditedReply(
+        data.escalation_packet?.suggested_reply
+        || data.auto_answer_draft
+        || data.pending_reply_draft
+        || ""
+      );
+    } catch (err) {
+      setInboxError(err.message || "Something went wrong.");
+    } finally {
+      setInboxSending(false);
+    }
+  }
+
+  async function sendOpsDecision(action) {
+    if (!inboxResult) return;
+    const clientId = sessionClientId || (selectedClientId ? Number(selectedClientId) : null);
+    try {
+      await fetch(apiUrl("/api/agent-poc/process-message/ops-decision"), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          client_id: clientId,
+          ops_action: action,
+          final_answer: editedReply,
+          original_draft: inboxResult.escalation_packet?.suggested_reply || inboxResult.auto_answer_draft,
+          category: inboxResult.classification?.category,
+          urgency_level: inboxResult.classification?.urgency_level,
+          source_excerpt: inboxResult.auto_answer_source_excerpt,
+        }),
+      });
+      setOpsDecisionSent(true);
+    } catch (err) {
+      setInboxError("Failed to record ops decision.");
+    }
+  }
+
+  // ── Main panel view toggle ────────────────────────────────────────────────
+  const [mainView, setMainView] = useState("chat"); // "chat" | "inbox"
+
+  // ── Left panel tabs ────────────────────────────────────────────────────────
   const LEFT_TABS = [
-    { id: "samples",    label: "Samples" },
-    { id: "validation", label: "Validation" },
-    { id: "pricing",    label: "Pricing" },
-    { id: "agents",     label: "Agents" },
+    { id: "samples",       label: "Samples" },
+    { id: "validation",    label: "Validation" },
+    { id: "inboxsamples",  label: "📬 Inbox" },
   ];
 
   return (
@@ -218,8 +281,33 @@ export default function App() {
           {leftTab === "samples" && (
             <div className="chipList">
               {(config?.sample_queries || []).map((q) => (
-                <button className="queryChip" key={q} type="button" onClick={() => runQuery(q)}>
+                <button className="queryChip" key={q} type="button" onClick={() => { setMainView("chat"); runQuery(q); }}>
                   {q}
+                </button>
+              ))}
+            </div>
+          )}
+
+          {leftTab === "inboxsamples" && (
+            <div className="inboxSamples inboxSamples--tab">
+              <p className="probeNote">Click a sample to load it into the Inbox Monitor.</p>
+              {[
+                { label: "Routine question",        msg: "Is this hotel pet-friendly?" },
+                { label: "Policy query",            msg: "What time is check-in and check-out?" },
+                { label: "In-house request (cab)",  msg: "Hi, my flight is delayed and I need to change my cab from 12 PM to 2 PM. Can you help?" },
+                { label: "Complaint",               msg: "I'm very unhappy. The room was dirty and no one came to fix it after 3 hours." },
+                { label: "Appreciation",            msg: "Thank you so much for the wonderful stay! The staff were incredibly helpful." },
+                { label: "Crisis",                  msg: "There is smoke coming from the room next to mine, I think there might be a fire!" },
+                { label: "Booking issue",           msg: "I booked for September 28th but my confirmation says October 28th. This is incorrect." },
+              ].map((s) => (
+                <button
+                  key={s.label}
+                  className="inboxSampleBtn"
+                  type="button"
+                  onClick={() => { setMainView("inbox"); setInboxInput(s.msg); }}
+                >
+                  <span className="inboxSampleLabel">{s.label}</span>
+                  <span className="inboxSampleMsg">{s.msg}</span>
                 </button>
               ))}
             </div>
@@ -229,7 +317,7 @@ export default function App() {
             <div className="probeList">
               <p className="probeNote">Each probe targets a specific validation stage.</p>
               {(config?.validation_sample_queries || []).map((item) => (
-                <button className="probeCard" key={item.query} type="button" onClick={() => runQuery(item.query)}>
+                <button className="probeCard" key={item.query} type="button" onClick={() => { setMainView("chat"); runQuery(item.query); }}>
                   <span className="probeLabel">{item.label}</span>
                   <span className="probeQuery">{item.query}</span>
                   {item.checks ? <span className="probeChecks">{item.checks}</span> : null}
@@ -238,36 +326,31 @@ export default function App() {
             </div>
           )}
 
-          {leftTab === "pricing" && (
-            <div className="probeList">
-              <p className="probeNote">Tests internal pricing + OTA confirmation flow.</p>
-              {(config?.pricing_sample_queries || []).map((item) => (
-                <button className="probeCard probeCard--pricing" key={item.query} type="button" onClick={() => runQuery(item.query)}>
-                  <span className="probeLabel">{item.label}</span>
-                  <span className="probeQuery">{item.query}</span>
-                  {item.checks ? <span className="probeChecks">{item.checks}</span> : null}
-                </button>
-              ))}
-            </div>
-          )}
-
-          {leftTab === "agents" && (
-            <div className="agentCardList">
-              {(config?.agents || []).map((agent) => (
-                <AgentSummaryCard agent={agent} key={agent.name} />
-              ))}
-            </div>
-          )}
         </div>
       </aside>
 
-      {/* ── Main chat panel ── */}
+      {/* ── Main panel ── */}
       <main className="mainPanel">
-        {/* Top bar */}
+        {/* Top bar with view toggle */}
         <div className="mainTopBar">
           <div className="mainTopBarLeft">
-            <span className="mainTopBarEyebrow">Analyst Console</span>
-            <h3 className="mainTopBarTitle">Smart Community Inbox: Ask Anything, Get Answers</h3>
+            <span className="mainTopBarEyebrow">Smart Community Inbox</span>
+            <div className="mainViewToggle">
+              <button
+                className={`mainViewBtn ${mainView === "chat" ? "mainViewBtn--active" : ""}`}
+                type="button"
+                onClick={() => setMainView("chat")}
+              >
+                💬 Q&amp;A Chat
+              </button>
+              <button
+                className={`mainViewBtn ${mainView === "inbox" ? "mainViewBtn--active" : ""}`}
+                type="button"
+                onClick={() => setMainView("inbox")}
+              >
+                📬 Inbox Monitor
+              </button>
+            </div>
           </div>
           <div className="mainTopBarRight">
             {sessionClientId && !selectedClientId ? (
@@ -284,6 +367,146 @@ export default function App() {
             </span>
           </div>
         </div>
+
+        {/* ── Inbox Monitor view ───────────────────────────────────────────── */}
+        {mainView === "inbox" && (
+          <div className="inboxMainPanel">
+            <div className="inboxMainHeader">
+              <h4 className="inboxMainTitle">Guest Message Processor</h4>
+              <p className="inboxMainSub">Paste any incoming guest message. The system will classify it, auto-reply if confident, or escalate with a suggested reply for your review.</p>
+            </div>
+
+            <div className="inboxMainComposer">
+              <textarea
+                className="inboxMainInput"
+                rows={4}
+                placeholder="Paste a guest message here — e.g. 'Is this hotel pet-friendly?' or 'My flight is delayed, I need to change my cab from 12 PM to 2 PM'"
+                value={inboxInput}
+                onChange={(e) => setInboxInput(e.target.value)}
+                disabled={inboxSending}
+              />
+              <button
+                className="inboxMainBtn"
+                type="button"
+                disabled={inboxSending || !inboxInput.trim()}
+                onClick={processInboxMessage}
+              >
+                {inboxSending ? "Processing…" : "Process Message →"}
+              </button>
+            </div>
+
+            {inboxError && <p className="inboxError">{inboxError}</p>}
+
+            {inboxResult && (
+              <div className="inboxMainResult">
+                {/* Original message */}
+                <div className="inboxOrigMsg">
+                  <span className="inboxOrigLabel">Guest message</span>
+                  <p className="inboxOrigText">{inboxResult.message_content}</p>
+                </div>
+
+                {/* Classification row */}
+                <div className="inboxClassRow">
+                  <span className={`catBadge catBadge--${inboxResult.classification?.category}`}>
+                    {inboxResult.classification?.category?.replace(/_/g, " ")}
+                  </span>
+                  <span className={`urgencyPill urgencyPill--${inboxResult.classification?.urgency_level}`}>
+                    {inboxResult.classification?.urgency_level?.toUpperCase()}
+                  </span>
+                  <span className="classMethod">{inboxResult.classification?.classification_method}</span>
+                  <span className="classConf">conf {Math.round((inboxResult.classification?.confidence || 0) * 100)}%</span>
+                  <span className="inboxTriagePill">Triage: <strong>{inboxResult.triage_state}</strong></span>
+                </div>
+
+                {/* Extracted entities */}
+                {(() => {
+                  const ent = inboxResult.classification?.entities || {};
+                  const items = [
+                    ...(ent.dates || []).map(d => `📅 ${d}`),
+                    ...(ent.times || []).map(t => `⏰ ${t}`),
+                    ...(ent.booking_refs || []).map(r => `🔖 ${r}`),
+                    ...(ent.guest_names || []).map(n => `👤 ${n}`),
+                  ];
+                  return items.length ? (
+                    <div className="inboxEntities">
+                      {items.map((item, i) => <span key={i} className="entityTag">{item}</span>)}
+                    </div>
+                  ) : null;
+                })()}
+
+                {/* Draft reply — always shown for review */}
+                {!opsDecisionSent && (inboxResult.auto_answer_draft || inboxResult.pending_reply_draft || inboxResult.escalation_packet?.suggested_reply) && (() => {
+                  const isAutoHigh = inboxResult.auto_answered;
+                  const isEscalation = !!inboxResult.escalation_packet;
+                  const isPendingReply = !!inboxResult.pending_reply_draft && !isAutoHigh && !isEscalation;
+
+                  return (
+                    <div className={`inboxDraftSection ${isEscalation ? "inboxDraftSection--escalation" : isAutoHigh ? "inboxDraftSection--auto" : "inboxDraftSection--pending"}`}>
+                      <div className="inboxSectionLabel">
+                        {isEscalation ? "⚠ Ops Escalation — " : isAutoHigh ? "✅ High-confidence auto-reply — " : "💬 Suggested reply — "}
+                        {isAutoHigh && <span className="inboxConfBadge">{Math.round((inboxResult.auto_answer_confidence || 0) * 100)}% confidence</span>}
+                        {isEscalation && (
+                          <span className={`urgencyPill urgencyPill--${inboxResult.classification?.urgency_level}`}>
+                            {inboxResult.escalation_packet.urgency_label}
+                          </span>
+                        )}
+                        {isPendingReply && <span className="inboxConfBadge inboxConfBadge--neutral">Review before sending</span>}
+                      </div>
+
+                      {isEscalation && inboxResult.escalation_packet.ops_action_label && (
+                        <div className="inboxActionTag">Action needed: <strong>{inboxResult.escalation_packet.ops_action_label}</strong></div>
+                      )}
+
+                      {isEscalation && inboxResult.escalation_packet.available_context?.length > 0 && (
+                        <div className="inboxContextList">
+                          <div className="inboxContextTitle">Relevant property info found:</div>
+                          {inboxResult.escalation_packet.available_context.slice(0, 3).map((ctx, i) => (
+                            <div className="inboxContextRow" key={i}>
+                              <span className="inboxCtxTitle">{ctx.title}</span>
+                              <span className="inboxCtxExcerpt">{ctx.excerpt?.slice(0, 150)}</span>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+
+                      {isAutoHigh && inboxResult.auto_answer_source_table && (
+                        <div className="inboxSourceNote">
+                          Source: {inboxResult.auto_answer_source_table}
+                          {inboxResult.auto_answer_source_excerpt ? ` — "${inboxResult.auto_answer_source_excerpt.slice(0, 120)}…"` : ""}
+                        </div>
+                      )}
+
+                      <div className="inboxSectionLabel" style={{ marginTop: 8, marginBottom: 2 }}>Reply to send (edit if needed):</div>
+                      <textarea
+                        className="inboxEditReply"
+                        rows={5}
+                        value={editedReply}
+                        onChange={(e) => setEditedReply(e.target.value)}
+                      />
+
+                      {isEscalation && inboxResult.escalation_packet.suggested_action && (
+                        <div className="inboxSuggestedAction">💡 Suggested action: {inboxResult.escalation_packet.suggested_action}</div>
+                      )}
+
+                      <div className="opsButtonRow">
+                        <button className="opsBtn opsBtn--approve" type="button" onClick={() => sendOpsDecision("approved")}>✓ Approve &amp; Send</button>
+                        <button className="opsBtn opsBtn--edit"    type="button" onClick={() => sendOpsDecision("edited")}>✎ Send Edited</button>
+                        <button className="opsBtn opsBtn--reject"  type="button" onClick={() => sendOpsDecision("rejected")}>✕ Reject</button>
+                      </div>
+                    </div>
+                  );
+                })()}
+
+                {opsDecisionSent && (
+                  <div className="inboxDecisionConfirm">✅ Decision recorded. The system has logged this for accuracy tracking.</div>
+                )}
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* ── Chat Q&A view ─────────────────────────────────────────────────── */}
+        {mainView === "chat" && <>
 
         {/* Message list */}
         <div className="messageList" ref={messageListRef}>
@@ -350,136 +573,6 @@ export default function App() {
                 <div className="msgContent">
                   <p style={{ whiteSpace: "pre-wrap", margin: 0 }}>{message.content}</p>
                 </div>
-
-                {/* OTA confirmation */}
-                {message.confirmationPrompt ? (
-                  <div className="otaConfirmRow">
-                    <span className="otaConfirmLabel">Check OTA platforms for live prices?</span>
-                    <button
-                      className="btnPrimary"
-                      disabled={isSending}
-                      type="button"
-                      onClick={() => runQuery(message.originalQuery, { confirmOta: true })}
-                    >
-                      Yes, search OTA
-                    </button>
-                    <button
-                      className="btnGhost"
-                      disabled={isSending}
-                      type="button"
-                      onClick={() =>
-                        setMessages((curr) =>
-                          curr.map((m) => (m === message ? { ...m, confirmationPrompt: false } : m))
-                        )
-                      }
-                    >
-                      No thanks
-                    </button>
-                  </div>
-                ) : null}
-
-                {/* OTA results card */}
-                {message.otaResults?.length ? (
-                  <div className="otaCard">
-                    <div className="otaCardHeader">
-                      <span className="otaCardIcon">🌐</span>
-                      <span className="otaCardTitle">Live OTA Prices</span>
-                      <span className="otaCardBadge">SerpAPI · Google Hotels · USD</span>
-                    </div>
-                    <div className="otaCardMeta">
-                      {message.otaCheckIn && message.otaCheckOut ? (
-                        <span>📅 {message.otaCheckIn} → {message.otaCheckOut}</span>
-                      ) : null}
-                      {message.otaFetchedAt ? (
-                        <span>🕐 {message.otaFetchedAt.slice(0, 16).replace("T", " ")} UTC</span>
-                      ) : null}
-                    </div>
-                    {[...(message.otaDateWarnings || []), ...(message.otaNameWarnings || [])].map((w, i) => (
-                      <div className="otaWarning" key={i}>⚠ {w}</div>
-                    ))}
-                    <div className="otaResultsList">
-                      {message.otaResults.map((r, i) => (
-                        <div className="otaResultRow" key={i}>
-                          {/* Hotel header */}
-                          <div className="otaResultHeader">
-                            <div className="otaResultName">{r.name}</div>
-                            <div className="otaResultMeta">
-                              {r.rate_per_night ? <span className="otaRate">from {r.rate_per_night}/night USD</span> : null}
-                              {r.rating ? <span className="otaRating">★ {r.rating}</span> : null}
-                              {r.reviews ? <span className="otaReviews">{r.reviews} reviews</span> : null}
-                            </div>
-                            {(r.check_in_time || r.check_out_time) ? (
-                              <div className="otaCheckTimes">
-                                {r.check_in_time ? <span>Check-in: {r.check_in_time}</span> : null}
-                                {r.check_out_time ? <span>Check-out: {r.check_out_time}</span> : null}
-                              </div>
-                            ) : null}
-                          </div>
-
-                          {/* Room categories — shown only when SerpAPI returned real room_type data */}
-                          {r.room_categories?.length ? (
-                            <div className="roomCategories">
-                              <div className="roomCategoriesTitle">Available Room Types</div>
-                              <div className="roomCategoriesGrid">
-                                {r.room_categories.map((cat, ci) => (
-                                  <div className="roomCategoryCard" key={ci}>
-                                    <div className="roomCategoryHeader">
-                                      <span className="roomCategoryName">{cat.room_type}</span>
-                                      <span className="roomCategoryLowest">from {cat.lowest_rate} USD/night</span>
-                                    </div>
-                                    {cat.offers?.length ? (
-                                      <div className="roomCategoryOffers">
-                                        {cat.offers.map((offer, oi) => (
-                                          <div className="roomCategoryOffer" key={oi}>
-                                            <span className="roomOfferSource">{offer.source}</span>
-                                            {offer.num_guests ? (
-                                              <span className="roomOfferGuests">{offer.num_guests} guest{offer.num_guests > 1 ? "s" : ""}</span>
-                                            ) : null}
-                                            <span className="roomOfferRate">{offer.rate || "N/A"} USD</span>
-                                            {offer.link ? (
-                                              <a className="roomOfferLink" href={offer.link} target="_blank" rel="noopener noreferrer">Book</a>
-                                            ) : null}
-                                          </div>
-                                        ))}
-                                      </div>
-                                    ) : null}
-                                  </div>
-                                ))}
-                              </div>
-                            </div>
-                          ) : r.ota_prices?.length ? (
-                            /* Flat OTA list — shown when SerpAPI does not return room_type breakdown.
-                               Google Hotels exposes only the cheapest available room per platform. */
-                            <div className="otaFlatList">
-                              <div className="otaFlatNote">
-                                Prices below are the lowest available room per platform
-                              </div>
-                              {r.ota_prices.map((p, j) => (
-                                <div className="roomCategoryOffer" key={j}>
-                                  <span className="roomOfferSource">{p.source}</span>
-                                  {p.num_guests ? (
-                                    <span className="roomOfferGuests">{p.num_guests} guest{p.num_guests > 1 ? "s" : ""}</span>
-                                  ) : null}
-                                  <span className="roomOfferRate">{p.rate || "N/A"} USD</span>
-                                  {p.link ? (
-                                    <a className="roomOfferLink" href={p.link} target="_blank" rel="noopener noreferrer">Book</a>
-                                  ) : null}
-                                </div>
-                              ))}
-                            </div>
-                          ) : null}
-
-                          {r.link ? (
-                            <a className="otaLink" href={r.link} target="_blank" rel="noopener noreferrer">
-                              View full hotel on OTA →
-                            </a>
-                          ) : null}
-                        </div>
-                      ))}
-                    </div>
-                    <div className="otaDisclaimer">All prices in USD · External market data, not confirmed internal rates</div>
-                  </div>
-                ) : null}
 
                 {/* Media previews */}
                 {message.mediaPreviews?.length ? (
@@ -574,6 +667,8 @@ export default function App() {
             </div>
           </form>
         </div>
+
+        </>}
       </main>
 
       <TracePanel response={lastResponse} />

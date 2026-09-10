@@ -443,7 +443,14 @@ def create_schema(conn: sqlite3.Connection) -> None:
                 fts_content TEXT,
                 fts_username TEXT,
                 translated_language TEXT,
-                user TEXT
+                user TEXT,
+                message_category TEXT,
+                urgency_level TEXT,
+                auto_answer_draft TEXT,
+                auto_answer_confidence REAL,
+                auto_answer_source TEXT,
+                requires_ops_action INTEGER DEFAULT 0,
+                ops_action_type TEXT
             )
             """,
             """
@@ -469,6 +476,22 @@ def create_schema(conn: sqlite3.Connection) -> None:
                 reply_text TEXT,
                 inserted_datetime TEXT,
                 deleted_at TEXT
+            )
+            """,
+            """
+            CREATE TABLE jx_bridge.auto_response_log (
+                id INTEGER PRIMARY KEY,
+                message_id INTEGER,
+                client_id INTEGER,
+                category TEXT,
+                urgency_level TEXT,
+                draft_answer TEXT,
+                confidence REAL,
+                ops_action TEXT,
+                final_answer TEXT,
+                source_table TEXT,
+                source_excerpt TEXT,
+                inserted_datetime TEXT
             )
             """,
         ],
@@ -1252,7 +1275,24 @@ def seed_inbox_events(conn: sqlite3.Connection) -> None:
         "Guest asks about group booking rates at {name}.",
         "Complaint: guest experienced a delay at check-in and needs follow-up.",
     ]
-    triages = ["reply_now", "needs_property_help", "waiting_on_property", "property_responded"]
+    triages = ["reply_now", "needs_property_help", "waiting_on_property", "property_responded",
+               "auto_replied", "pending_ops_approval", "escalated_crisis"]
+
+    # Category/urgency assignment aligned with question templates
+    TEMPLATE_CATEGORIES = [
+        ("question",         "low",      0, None),                   # airport pickup question
+        ("complaint",        "medium",   1, "complaint_followup"),   # room cleaning complaint
+        ("question",         "low",      0, None),                   # dining timing question
+        ("booking_related",  "high",     1, "booking_correction"),   # incorrect booking date
+        ("question",         "low",      0, None),                   # late checkout question
+        ("appreciation",     "low",      0, None),                   # review — praise + parking
+        ("question",         "low",      0, None),                   # nearby events question
+        ("complaint",        "high",     1, "complaint_followup"),   # noise complaint
+        ("question",         "low",      0, None),                   # pool hours question
+        ("appreciation",     "low",      0, None),                   # breakfast feedback + loyalty
+        ("booking_related",  "medium",   1, "rate_inquiry"),         # group booking rates
+        ("complaint",        "medium",   1, "complaint_followup"),   # check-in delay
+    ]
 
     interaction_rows = []
     message_rows = []
@@ -1270,12 +1310,15 @@ def seed_inbox_events(conn: sqlite3.Connection) -> None:
         # ~30 interactions per client over 90 days (every 3 days)
         msg_slot = 0
         for day_offset in range(-88, 2, 3):
-            triage = triages[(client_index + msg_slot) % len(triages)]
+            # Use first 4 triage states for cycling (legacy states)
+            triage = triages[(client_index + msg_slot) % 4]
             title = f"{name} guest question {msg_slot + 1}"
             interaction_rows.append((interaction_id, client_id, json.dumps({"source": "dummy"}), msg_slot % 3, title))
             content = question_templates[msg_slot % len(question_templates)].format(name=name, city=city)
             network_id = [1, 7, 9, 11][msg_slot % 4]
             message_type = ["comments", "messages", "review", "mentions"][msg_slot % 4]
+            tmpl_idx = msg_slot % len(TEMPLATE_CATEGORIES)
+            cat, urgency, req_ops, ops_type = TEMPLATE_CATEGORIES[tmpl_idx]
             message_rows.append((
                 message_id, client_id, f"src-{message_id}", dt(day_offset),
                 content, f"Guest {msg_slot + 1}",
@@ -1283,6 +1326,7 @@ def seed_inbox_events(conn: sqlite3.Connection) -> None:
                 network_id, interaction_id, None, "new", "page",
                 message_type, content, f"guest{msg_slot}", "en",
                 json.dumps({"name": f"Guest {msg_slot + 1}"}),
+                cat, urgency, None, None, None, req_ops, ops_type,
             ))
             triage_rows.append((interaction_id, interaction_id, triage))
             if triage in {"waiting_on_property", "property_responded"}:
@@ -1317,8 +1361,8 @@ def seed_inbox_events(conn: sqlite3.Connection) -> None:
         conn,
         """
         INSERT INTO jx_bridge.messages
-        (message_id, client_id, source_id, source_timestamp, content, author, permalink, social_network_type_id, interaction_id, parent_id, last_state, page_social_network_id, type, fts_content, fts_username, translated_language, user)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        (message_id, client_id, source_id, source_timestamp, content, author, permalink, social_network_type_id, interaction_id, parent_id, last_state, page_social_network_id, type, fts_content, fts_username, translated_language, user, message_category, urgency_level, auto_answer_draft, auto_answer_confidence, auto_answer_source, requires_ops_action, ops_action_type)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         message_rows,
     )

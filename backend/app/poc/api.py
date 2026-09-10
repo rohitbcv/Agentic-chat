@@ -1,12 +1,13 @@
 from __future__ import annotations
 
 from collections import Counter
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 from decimal import Decimal
 from html import escape
 import hashlib
 import json
 import re
+from os import getenv
 from typing import Any
 from urllib.parse import quote
 
@@ -1276,4 +1277,319 @@ def run_agent_poc_chat(payload: PocChatRequest) -> dict[str, Any]:
         "orchestrator": decision.to_dict(),
         "decision_validation": decision_validation.to_dict(),
         "evidence_validation": evidence_validation.to_dict(),
+    }
+
+
+# ── Intelligent Inbox: Process Message ────────────────────────────────────────
+
+from ..services.message_classifier import classify_message
+from ..services.message_auto_answer import attempt_auto_answer, AUTO_ANSWER_THRESHOLD, SUGGESTED_REPLY_THRESHOLD
+from ..services.message_escalation import build_escalation_packet
+
+
+class ProcessMessageRequest(BaseModel):
+    message_content: str = Field(min_length=1, max_length=5000)
+    client_id: int
+    message_type: str = "messages"   # comments | messages | review | mentions
+    author: str | None = None
+    interaction_id: int | None = None
+
+
+def _log_auto_response(
+    message_id: int | None,
+    client_id: int,
+    category: str,
+    urgency: str,
+    draft: str | None,
+    confidence: float,
+    source_table: str | None,
+    source_excerpt: str | None,
+    ops_action: str = "auto_replied",
+    final_answer: str | None = None,
+) -> None:
+    """Insert a row into jx_bridge.auto_response_log for learning + accuracy tracking."""
+    now = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
+    try:
+        rows = repository.execute_query(
+            "SELECT COALESCE(MAX(id), 0) + 1 AS next_id FROM jx_bridge.auto_response_log",
+            {},
+        )
+        next_id = rows[0]["next_id"] if rows else 1
+        repository.execute_query(
+            """
+            INSERT INTO jx_bridge.auto_response_log
+            (id, message_id, client_id, category, urgency_level, draft_answer, confidence,
+             ops_action, final_answer, source_table, source_excerpt, inserted_datetime)
+            VALUES (:id, :message_id, :client_id, :category, :urgency_level, :draft_answer,
+                    :confidence, :ops_action, :final_answer, :source_table, :source_excerpt,
+                    :inserted_datetime)
+            """,
+            {
+                "id": next_id,
+                "message_id": message_id,
+                "client_id": client_id,
+                "category": category,
+                "urgency_level": urgency,
+                "draft_answer": draft,
+                "confidence": confidence,
+                "ops_action": ops_action,
+                "final_answer": final_answer or draft,
+                "source_table": source_table,
+                "source_excerpt": (source_excerpt or "")[:400],
+                "inserted_datetime": now,
+            },
+        )
+    except Exception:
+        pass  # logging must never break the main flow
+
+
+def _store_learned_faq(client_id: int, message_excerpt: str, corrected_answer: str) -> None:
+    """When ops edits/corrects an answer, store it as a learned client_note (type_id=3)."""
+    now = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
+    try:
+        rows = repository.execute_query(
+            "SELECT COALESCE(MAX(id), 0) + 1 AS next_id FROM clients.client_notes",
+            {},
+        )
+        next_id = rows[0]["next_id"] if rows else 1
+        repository.execute_query(
+            """
+            INSERT INTO clients.client_notes
+            (id, client_id, title, note, type_id, inserted_datetime, updated_datetime, deleted_at)
+            VALUES (:id, :client_id, :title, :note, 3, :now, :now, NULL)
+            """,
+            {
+                "id": next_id,
+                "client_id": client_id,
+                "title": f"Learned response: {message_excerpt[:80]}",
+                "note": corrected_answer,
+                "now": now,
+            },
+        )
+    except Exception:
+        pass
+
+
+_REPLY_NOW_TEMPLATES: dict[str, str] = {
+    "appreciation": "Thank you so much for your kind words — it truly means a lot to our entire team. We're so glad you had a wonderful experience with us and hope to welcome you back very soon!",
+    "spam": "Thank you for reaching out. This message does not appear to require a response from our team.",
+}
+
+_REPLY_NOW_SYSTEM_PROMPT = """
+You are a warm, professional hotel concierge. Write a brief, human-like reply to the guest message.
+Keep it to 2-3 sentences. Do not ask questions. Do not mention the hotel name in the first word.
+For appreciation/thank-you messages: acknowledge warmly, express gratitude, invite them back.
+For spam or irrelevant messages: a polite non-committal acknowledgement.
+Return plain text only — no subject line, no greeting.
+""".strip()
+
+
+def _generate_reply_now_draft(message: str, category: str, client_name: str, client_id: int) -> str:
+    """Generate a suggested reply for reply_now categories (appreciation, spam, etc.)."""
+    api_key = (getenv("OPENAI_API_KEY") or "").strip()
+    model = (getenv("OPENAI_MODEL") or "gpt-5.4-mini").strip()
+
+    if api_key:
+        try:
+            from openai import OpenAI as _OpenAI
+            _client = _OpenAI(api_key=api_key)
+            response = _client.responses.create(
+                model=model,
+                instructions=_REPLY_NOW_SYSTEM_PROMPT,
+                input=f"Hotel: {client_name}\nCategory: {category}\nGuest message: {message[:800]}",
+                max_output_tokens=150,
+                temperature=0.4,
+            )
+            draft = str(getattr(response, "output_text", "") or "").strip()
+            if len(draft) > 10:
+                return draft
+        except Exception:
+            pass
+
+    return _REPLY_NOW_TEMPLATES.get(category, "Thank you for your message. Our team will be in touch shortly.")
+
+
+@router.post("/process-message")
+def process_incoming_message(payload: ProcessMessageRequest) -> dict[str, Any]:
+    """
+    Intelligent inbox processor for incoming guest messages.
+
+    Pipeline:
+    1. Classify message (category, urgency, ops action)
+    2. If routine question → attempt FAQ auto-answer (confidence >= 0.90 → auto-reply)
+    3. If complex/actionable or low confidence → escalate to ops with context + suggested reply
+    4. Log everything to auto_response_log for learning and accuracy tracking
+    """
+    message = (payload.message_content or "").strip()
+    client_id = payload.client_id
+
+    # Resolve client name for human-like replies
+    client_name = "the hotel"
+    try:
+        catalog = load_client_catalog()
+        match = next((c for c in catalog if c.get("id") == client_id), None)
+        if match:
+            client_name = str(match.get("name") or "the hotel")
+    except Exception:
+        pass
+
+    # ── Stage 1: Classify ─────────────────────────────────────────────────────
+    classification = classify_message(message)
+
+    triage_state = "reply_now"
+    auto_answered = False
+    auto_answer_draft = None
+    auto_answer_confidence = 0.0
+    auto_answer_source_table = None
+    auto_answer_source_excerpt = None
+    escalation_packet_dict = None
+    suggested_reply_only = None  # 0.70-0.89 confidence draft for ops
+    pending_reply_draft = None   # draft for reply_now categories (appreciation, spam, etc.)
+
+    # ── Stage 2: FAQ Auto-Answer (for questions only) ─────────────────────────
+    if classification.category in ("question", "booking_related") and not classification.requires_ops_action:
+        auto_result = attempt_auto_answer(message, client_id, client_name)
+        auto_answer_confidence = auto_result.confidence
+        auto_answer_source_table = auto_result.source_table
+        auto_answer_source_excerpt = auto_result.source_excerpt
+
+        if auto_result.auto_answered:
+            # High confidence + grounding passed — mark as auto-replied but still show for approval
+            auto_answered = True
+            auto_answer_draft = auto_result.draft
+            triage_state = "auto_replied"
+
+            # Log to auto_response_log
+            _log_auto_response(
+                message_id=None,
+                client_id=client_id,
+                category=classification.category,
+                urgency=classification.urgency_level,
+                draft=auto_answer_draft,
+                confidence=auto_answer_confidence,
+                source_table=auto_answer_source_table,
+                source_excerpt=auto_answer_source_excerpt,
+                ops_action="auto_replied",
+                final_answer=auto_answer_draft,
+            )
+
+        elif auto_result.confidence >= SUGGESTED_REPLY_THRESHOLD:
+            # Partial confidence — send to ops as suggested reply
+            suggested_reply_only = auto_result.draft
+            triage_state = "pending_ops_approval"
+        else:
+            triage_state = "pending_ops_approval"
+
+    # ── Stage 2b: Draft reply for non-escalated categories (appreciation, spam, reply_now) ──
+    # Always generate a suggested reply so ops can review before sending — never send blind.
+    elif classification.category in ("appreciation", "spam") or (
+        not classification.requires_ops_action
+        and classification.urgency_level == "low"
+        and triage_state == "reply_now"
+    ):
+        pending_reply_draft = _generate_reply_now_draft(message, classification.category, client_name, client_id)
+
+    # ── Stage 3: Escalation ───────────────────────────────────────────────────
+    needs_escalation = (
+        not auto_answered
+        and (
+            classification.requires_ops_action
+            or classification.category in ("complaint", "crisis", "in_house_request", "external_dm")
+            or classification.urgency_level in ("critical", "high")
+            or triage_state == "pending_ops_approval"
+        )
+    )
+
+    if needs_escalation:
+        packet = build_escalation_packet(
+            message=message,
+            client_id=client_id,
+            client_name=client_name,
+            classification=classification,
+            interaction_id=payload.interaction_id,
+            auto_answer_draft=suggested_reply_only,
+        )
+        escalation_packet_dict = packet.to_dict()
+        triage_state = packet.triage_state
+
+        # Log escalation
+        _log_auto_response(
+            message_id=None,
+            client_id=client_id,
+            category=classification.category,
+            urgency=classification.urgency_level,
+            draft=packet.suggested_reply,
+            confidence=auto_answer_confidence,
+            source_table=auto_answer_source_table,
+            source_excerpt=auto_answer_source_excerpt,
+            ops_action="pending_ops_approval",
+            final_answer=None,
+        )
+
+    # ── Response ──────────────────────────────────────────────────────────────
+    return {
+        "message_content": message,
+        "client_id": client_id,
+        "client_name": client_name,
+        "classification": classification.to_dict(),
+        "auto_answered": auto_answered,
+        "auto_answer_draft": auto_answer_draft,
+        "auto_answer_confidence": round(auto_answer_confidence, 3),
+        "auto_answer_source_table": auto_answer_source_table,
+        "auto_answer_source_excerpt": auto_answer_source_excerpt,
+        "pending_reply_draft": pending_reply_draft,   # for reply_now categories (appreciation, etc.)
+        "requires_ops_action": classification.requires_ops_action,
+        "ops_action_type": classification.ops_action_type,
+        "escalation_packet": escalation_packet_dict,
+        "triage_state": triage_state,
+    }
+
+
+@router.post("/process-message/ops-decision")
+def record_ops_decision(
+    message_id: int | None = None,
+    client_id: int = 0,
+    ops_action: str = "approved",     # approved | edited | rejected
+    final_answer: str | None = None,
+    original_draft: str | None = None,
+    category: str = "question",
+    urgency_level: str = "low",
+    source_excerpt: str | None = None,
+) -> dict[str, Any]:
+    """
+    Record the ops team's decision on an escalated message.
+
+    - approved: ops sends the AI-suggested reply as-is
+    - edited: ops modified the reply → store as learned FAQ
+    - rejected: ops rejected the draft → no learning, log for review
+    """
+    was_edited = ops_action == "edited" and final_answer and final_answer != original_draft
+
+    # Store correction as learned FAQ for future auto-answers
+    if was_edited and client_id and source_excerpt and final_answer:
+        _store_learned_faq(client_id, source_excerpt, final_answer)
+
+    # Log the decision
+    _log_auto_response(
+        message_id=message_id,
+        client_id=client_id,
+        category=category,
+        urgency=urgency_level,
+        draft=original_draft,
+        confidence=1.0,  # ops-confirmed
+        source_table=None,
+        source_excerpt=source_excerpt,
+        ops_action=ops_action,
+        final_answer=final_answer,
+    )
+
+    return {
+        "recorded": True,
+        "ops_action": ops_action,
+        "learned_faq_stored": was_edited,
+        "message": (
+            "Correction stored as a learned FAQ for future auto-answers."
+            if was_edited
+            else f"Decision '{ops_action}' logged."
+        ),
     }
