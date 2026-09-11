@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { AgentSummaryCard } from "./components/AgentSummaryCard";
 import { TracePanel } from "./components/TracePanel";
+import { PropertyChatPanel } from "./components/PropertyChatPanel";
 
 const API_BASE = import.meta.env.VITE_API_BASE ?? "";
 
@@ -32,6 +33,7 @@ export default function App() {
   const [lastResponse, setLastResponse] = useState(null);
   const [error, setError] = useState("");
   const [leftTab, setLeftTab] = useState("samples");
+  const [mainView, setMainView] = useState("chat"); // "chat" | "inbox"
   const messageListRef = useRef(null);
 
   // ── Inbox Monitor state ─────────────────────────────────────────────────
@@ -46,6 +48,8 @@ export default function App() {
   const [convHistory, setConvHistory]       = useState([]);
   const [historyLoading, setHistoryLoading] = useState(false);
   const historyBottomRef = useRef(null);
+  // Property chat — guest reply generated from property's answer
+  const [generatedGuestReply, setGeneratedGuestReply] = useState(null);
 
   useEffect(() => {
     let ignore = false;
@@ -68,7 +72,7 @@ export default function App() {
     if (!clientId) return;
     setHistoryLoading(true);
     try {
-      const res = await fetch(apiUrl(`/api/agent-poc/conversation-history?client_id=${clientId}&days=30`));
+      const res = await fetch(apiUrl(`/api/agent-poc/conversation-history?client_id=${clientId}&limit=5`));
       if (!res.ok) throw new Error("History fetch failed");
       const data = await res.json();
       setConvHistory(data.history || []);
@@ -191,6 +195,7 @@ export default function App() {
     setInboxResult(null);
     setOpsDecisionSent(false);
     setEditedReply("");
+    setGeneratedGuestReply(null);
     try {
       const res = await fetch(apiUrl("/api/agent-poc/process-message"), {
         method: "POST",
@@ -263,9 +268,6 @@ export default function App() {
       setInboxError("Failed to record ops decision.");
     }
   }
-
-  // ── Main panel view toggle ────────────────────────────────────────────────
-  const [mainView, setMainView] = useState("chat"); // "chat" | "inbox"
 
   // ── Left panel tabs ────────────────────────────────────────────────────────
   const LEFT_TABS = [
@@ -589,7 +591,7 @@ export default function App() {
             {/* ── Conversation History ──────────────────────────────────── */}
             <div className="convHistoryPanel">
               <div className="convHistoryHeader">
-                <h5 className="convHistoryTitle">📋 Conversation History — Last 30 Days</h5>
+                <h5 className="convHistoryTitle">📋 Recent Conversations — Last 5 Messages</h5>
                 {historyLoading && <span className="convHistoryLoading">Loading…</span>}
                 {!historyLoading && convHistory.length > 0 && (
                   <span className="convHistoryCount">{convHistory.length} message{convHistory.length !== 1 ? "s" : ""}</span>
@@ -825,6 +827,53 @@ export default function App() {
       </main>
 
       <TracePanel response={lastResponse} />
+
+      {/* ── Property Chat Panel (right, appears on escalation) ── */}
+      {mainView === "inbox" && inboxResult?.escalation_packet && (
+        <PropertyChatPanel
+          inboxResult={inboxResult}
+          clientId={sessionClientId || (selectedClientId ? Number(selectedClientId) : null)}
+          clientName={inboxResult?.client_name}
+          onGuestReplyGenerated={(reply) => {
+            setGeneratedGuestReply(reply);
+            // Append the auto-generated reply to conversation history
+            const channelLabels = {
+              messages: "💬 Direct Message", comments: "🌐 Social Comment",
+              review: "⭐ Platform Review",  mentions: "📢 Brand Mention",
+            };
+            setConvHistory((prev) => [
+              ...prev,
+              {
+                message_id:    null,
+                ts:            new Date().toISOString(),
+                content:       inboxResult.message_content,
+                author:        "Guest",
+                message_type:  inboxResult.message_type || "messages",
+                channel_label: channelLabels[inboxResult.message_type] || "📨 Message",
+                category:      inboxResult.classification?.category,
+                urgency_level: inboxResult.classification?.urgency_level,
+                triage_state:  "auto_replied",
+                reply_text:    reply,
+                ops_action:    "auto_replied",
+                _isNew:        true,
+              },
+            ]);
+          }}
+        />
+      )}
+
+      {/* Generated guest reply banner — shown in inbox monitor */}
+      {mainView === "inbox" && generatedGuestReply && (
+        <div className="generatedReplyBanner">
+          <div className="generatedReplyBannerInner">
+            <span className="generatedReplyBannerIcon">✅</span>
+            <div>
+              <div className="generatedReplyBannerTitle">Guest reply auto-generated from property answer</div>
+              <p className="generatedReplyBannerText">{generatedGuestReply}</p>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

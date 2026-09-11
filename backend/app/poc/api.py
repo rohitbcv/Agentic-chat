@@ -1549,17 +1549,13 @@ def process_incoming_message(payload: ProcessMessageRequest) -> dict[str, Any]:
 
 
 @router.get("/conversation-history")
-def get_conversation_history(client_id: int, days: int = 30) -> dict[str, Any]:
+def get_conversation_history(client_id: int, limit: int = 5) -> dict[str, Any]:
     """
-    Return the last `days` days of messages for a client, joined with any
+    Return the last `limit` messages for a client, joined with any
     ops response logged in auto_response_log, ordered chronologically
     (oldest first so the frontend can simply append new messages at the bottom).
     """
-    cutoff = (datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
-              - __import__("datetime").timedelta(days=days)
-              ).strftime("%Y-%m-%d")
-
-    # Fetch messages from jx_bridge.messages
+    # Fetch last `limit` messages from jx_bridge.messages (newest first, then reverse)
     messages_rows = repository.execute_query(
         """
         SELECT
@@ -1576,12 +1572,16 @@ def get_conversation_history(client_id: int, days: int = 30) -> dict[str, Any]:
         FROM jx_bridge.messages m
         LEFT JOIN jx_bridge.thread_triage tt ON tt.interaction_id = m.interaction_id
         WHERE m.client_id = :client_id
-          AND m.source_timestamp >= :cutoff
-        ORDER BY m.source_timestamp ASC
-        LIMIT 200
+        ORDER BY m.source_timestamp DESC
+        LIMIT :limit
         """,
-        {"client_id": client_id, "cutoff": cutoff},
+        {"client_id": client_id, "limit": limit},
     )
+    # Reverse so oldest is first (chronological order for display)
+    messages_rows = list(reversed(messages_rows))
+
+    # Collect message IDs to join with responses
+    msg_ids = [row.get("message_id") for row in messages_rows if row.get("message_id") is not None]
 
     # Fetch logged responses for those messages
     response_rows = repository.execute_query(
@@ -1597,10 +1597,9 @@ def get_conversation_history(client_id: int, days: int = 30) -> dict[str, Any]:
             inserted_datetime   AS ts
         FROM jx_bridge.auto_response_log
         WHERE client_id = :client_id
-          AND inserted_datetime >= :cutoff
         ORDER BY inserted_datetime ASC
         """,
-        {"client_id": client_id, "cutoff": cutoff},
+        {"client_id": client_id},
     )
 
     # Index responses by message_id for quick join
@@ -1646,7 +1645,135 @@ def get_conversation_history(client_id: int, days: int = 30) -> dict[str, Any]:
             "ops_action":    ops_action,
         })
 
-    return {"client_id": client_id, "days": days, "history": history}
+    return {"client_id": client_id, "limit": limit, "history": history}
+
+
+# ── Property Chat: in-memory session store ────────────────────────────────────
+# Keyed by "{client_id}_{chat_key}" where chat_key is a short identifier
+# (interaction_id or a frontend-generated UUID for brand-new messages).
+# Each value is a list of message dicts: {sender, text, ts, guest_reply (opt)}
+from collections import defaultdict as _defaultdict
+_PROPERTY_CHAT: dict[str, list[dict]] = _defaultdict(list)
+
+
+class PropertyReplyRequest(BaseModel):
+    chat_key: str               # unique identifier for the alert/conversation
+    client_id: int
+    client_name: str | None = None
+    guest_message: str          # original guest message
+    property_reply: str = Field(min_length=1, max_length=2000)
+    category: str = "question"
+    urgency_level: str = "low"
+
+
+def _llm_guest_reply_from_property(
+    guest_message: str,
+    property_reply: str,
+    client_name: str,
+    category: str,
+) -> str:
+    """Generate a polished guest-facing reply using the property's raw answer."""
+    api_key = (getenv("OPENAI_API_KEY") or "").strip()
+    model   = (getenv("OPENAI_MODEL") or "gpt-5.4-mini").strip()
+
+    system = (
+        "You are a hospitality communications assistant for a hotel. "
+        "The property team has given you their internal answer to a guest query. "
+        "Write a warm, professional, concise reply TO THE GUEST — do NOT mention "
+        "'the property team' or internal process. "
+        "Respond in 2-3 sentences max. Start directly with the answer."
+    )
+    prompt = (
+        f"Hotel: {client_name}\n"
+        f"Guest message: {guest_message}\n"
+        f"Property team's answer: {property_reply}\n"
+        f"Write the guest-facing reply:"
+    )
+    if not api_key:
+        # Deterministic fallback — weave property reply into a polite response
+        return f"Thank you for your message! {property_reply.strip().rstrip('.')}. Please let us know if you need anything else."
+    try:
+        from openai import OpenAI
+        client = OpenAI(api_key=api_key)
+        resp = client.responses.create(
+            model=model,
+            instructions=system,
+            input=prompt,
+            max_output_tokens=150,
+            temperature=0.4,
+        )
+        return str(getattr(resp, "output_text", "") or "").strip() or (
+            f"Thank you for your patience! {property_reply.strip()}."
+        )
+    except Exception:
+        return f"Thank you for your message! {property_reply.strip().rstrip('.')}. Please let us know if you need anything else."
+
+
+@router.get("/property-chat/{chat_key}")
+def get_property_chat(chat_key: str, client_id: int) -> dict[str, Any]:
+    """Return in-memory chat history for a property chat session."""
+    key = f"{client_id}_{chat_key}"
+    return {"chat_key": chat_key, "messages": _PROPERTY_CHAT.get(key, [])}
+
+
+@router.post("/property-reply")
+def post_property_reply(payload: PropertyReplyRequest) -> dict[str, Any]:
+    """
+    Property team sends a reply to an escalated guest message.
+
+    1. Saves to in-memory chat store (keyed by client_id + chat_key)
+    2. Generates a polished guest-facing reply via LLM
+    3. Saves that guest reply to the store too
+    4. Returns both the property reply and the generated guest reply
+    """
+    key          = f"{payload.client_id}_{payload.chat_key}"
+    now          = datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
+    client_name  = payload.client_name or "the hotel"
+
+    # Save property message
+    _PROPERTY_CHAT[key].append({
+        "sender":  "property",
+        "text":    payload.property_reply,
+        "ts":      now,
+    })
+
+    # Generate guest-facing reply from the property's answer
+    guest_reply = _llm_guest_reply_from_property(
+        guest_message  = payload.guest_message,
+        property_reply = payload.property_reply,
+        client_name    = client_name,
+        category       = payload.category,
+    )
+
+    # Save the generated guest reply as a system message
+    _PROPERTY_CHAT[key].append({
+        "sender":      "system",
+        "text":        guest_reply,
+        "ts":          now,
+        "is_guest_reply": True,
+    })
+
+    # Log to auto_response_log for learning
+    _log_auto_response(
+        message_id    = None,
+        client_id     = payload.client_id,
+        category      = payload.category,
+        urgency       = payload.urgency_level,
+        draft         = guest_reply,
+        confidence    = 1.0,
+        source_table  = "property_chat",
+        source_excerpt= payload.property_reply[:200],
+        ops_action    = "auto_replied",
+        final_answer  = guest_reply,
+    )
+
+    return {
+        "chat_key":        payload.chat_key,
+        "property_reply":  payload.property_reply,
+        "guest_reply":     guest_reply,
+        "ts":              now,
+        "messages":        _PROPERTY_CHAT[key],
+    }
 
 
 @router.post("/process-message/ops-decision")
