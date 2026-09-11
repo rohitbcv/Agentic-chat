@@ -36,11 +36,16 @@ export default function App() {
 
   // ── Inbox Monitor state ─────────────────────────────────────────────────
   const [inboxInput, setInboxInput] = useState("");
+  const [inboxMessageType, setInboxMessageType] = useState("messages"); // comments|messages|review|mentions
   const [inboxResult, setInboxResult] = useState(null);
   const [inboxSending, setInboxSending] = useState(false);
   const [inboxError, setInboxError] = useState("");
   const [opsDecisionSent, setOpsDecisionSent] = useState(false);
   const [editedReply, setEditedReply] = useState("");
+  // Conversation history
+  const [convHistory, setConvHistory]       = useState([]);
+  const [historyLoading, setHistoryLoading] = useState(false);
+  const historyBottomRef = useRef(null);
 
   useEffect(() => {
     let ignore = false;
@@ -57,6 +62,35 @@ export default function App() {
     loadConfig();
     return () => { ignore = true; };
   }, []);
+
+  // ── Load conversation history when client changes or inbox view is opened ──
+  const fetchConversationHistory = async (clientId) => {
+    if (!clientId) return;
+    setHistoryLoading(true);
+    try {
+      const res = await fetch(apiUrl(`/api/agent-poc/conversation-history?client_id=${clientId}&days=30`));
+      if (!res.ok) throw new Error("History fetch failed");
+      const data = await res.json();
+      setConvHistory(data.history || []);
+    } catch (_) {
+      setConvHistory([]);
+    } finally {
+      setHistoryLoading(false);
+    }
+  };
+
+  // Fetch history when switching to inbox view or when client is resolved
+  useEffect(() => {
+    const clientId = sessionClientId || (selectedClientId ? Number(selectedClientId) : null);
+    if (mainView === "inbox" && clientId) fetchConversationHistory(clientId);
+  }, [mainView, sessionClientId, selectedClientId]);
+
+  // Scroll history to bottom when it changes
+  useEffect(() => {
+    if (historyBottomRef.current) {
+      historyBottomRef.current.scrollIntoView({ behavior: "smooth" });
+    }
+  }, [convHistory]);
 
   const selectedClient = useMemo(
     () => (config?.clients || []).find((c) => String(c.id) === String(selectedClientId)),
@@ -164,19 +198,42 @@ export default function App() {
         body: JSON.stringify({
           message_content: msg,
           client_id: clientId,
-          message_type: "messages",
+          message_type: inboxMessageType,
         }),
       });
       if (!res.ok) throw new Error(`Request failed: ${res.status}`);
       const data = await res.json();
       setInboxResult(data);
       // Populate editable reply from whichever draft is available
-      setEditedReply(
+      const draft =
         data.escalation_packet?.suggested_reply
         || data.auto_answer_draft
         || data.pending_reply_draft
-        || ""
-      );
+        || "";
+      setEditedReply(draft);
+
+      // ── Append to conversation history immediately ──
+      const channelLabels = {
+        messages: "💬 Direct Message",
+        comments: "🌐 Social Comment",
+        review:   "⭐ Platform Review",
+        mentions: "📢 Brand Mention",
+      };
+      const newEntry = {
+        message_id:    null,          // not yet persisted
+        ts:            new Date().toISOString(),
+        content:       msg,
+        author:        "Guest",
+        message_type:  inboxMessageType,
+        channel_label: channelLabels[inboxMessageType] || "📨 Message",
+        category:      data.classification?.category,
+        urgency_level: data.classification?.urgency_level,
+        triage_state:  data.triage_state,
+        reply_text:    draft || null,
+        ops_action:    data.auto_answered ? "auto_replied" : data.triage_state === "escalated_crisis" ? "escalated" : "pending",
+        _isNew:        true,          // highlight newest entry
+      };
+      setConvHistory((prev) => [...prev, newEntry]);
     } catch (err) {
       setInboxError(err.message || "Something went wrong.");
     } finally {
@@ -376,6 +433,26 @@ export default function App() {
               <p className="inboxMainSub">Paste any incoming guest message. The system will classify it, auto-reply if confident, or escalate with a suggested reply for your review.</p>
             </div>
 
+            {/* Channel selector */}
+            <div className="inboxChannelBar">
+              <span className="inboxChannelLabel">Source channel:</span>
+              {[
+                { id: "messages", label: "💬 DM / Message",    icon: "💬" },
+                { id: "comments", label: "🌐 Social Comment",  icon: "🌐" },
+                { id: "review",   label: "⭐ Platform Review", icon: "⭐" },
+                { id: "mentions", label: "📢 Brand Mention",   icon: "📢" },
+              ].map((ch) => (
+                <button
+                  key={ch.id}
+                  className={`inboxChannelBtn ${inboxMessageType === ch.id ? "inboxChannelBtn--active" : ""}`}
+                  type="button"
+                  onClick={() => setInboxMessageType(ch.id)}
+                >
+                  {ch.label}
+                </button>
+              ))}
+            </div>
+
             <div className="inboxMainComposer">
               <textarea
                 className="inboxMainInput"
@@ -413,6 +490,12 @@ export default function App() {
                   <span className={`urgencyPill urgencyPill--${inboxResult.classification?.urgency_level}`}>
                     {inboxResult.classification?.urgency_level?.toUpperCase()}
                   </span>
+                  {inboxResult.channel_label && (
+                    <span className={`channelBadge channelBadge--${inboxResult.message_type}`}>
+                      { { messages: "💬", comments: "🌐", review: "⭐", mentions: "📢" }[inboxResult.message_type] || "📨" }
+                      {" "}{inboxResult.channel_label}
+                    </span>
+                  )}
                   <span className="classMethod">{inboxResult.classification?.classification_method}</span>
                   <span className="classConf">conf {Math.round((inboxResult.classification?.confidence || 0) * 100)}%</span>
                   <span className="inboxTriagePill">Triage: <strong>{inboxResult.triage_state}</strong></span>
@@ -502,6 +585,76 @@ export default function App() {
                 )}
               </div>
             )}
+
+            {/* ── Conversation History ──────────────────────────────────── */}
+            <div className="convHistoryPanel">
+              <div className="convHistoryHeader">
+                <h5 className="convHistoryTitle">📋 Conversation History — Last 30 Days</h5>
+                {historyLoading && <span className="convHistoryLoading">Loading…</span>}
+                {!historyLoading && convHistory.length > 0 && (
+                  <span className="convHistoryCount">{convHistory.length} message{convHistory.length !== 1 ? "s" : ""}</span>
+                )}
+              </div>
+
+              {!historyLoading && convHistory.length === 0 && (
+                <p className="convHistoryEmpty">No messages found for this client in the last 30 days.</p>
+              )}
+
+              <div className="convHistoryList">
+                {convHistory.map((item, idx) => {
+                  const channelIcon = { messages: "💬", comments: "🌐", review: "⭐", mentions: "📢" }[item.message_type] || "📨";
+                  const urgencyColor = { critical: "#dc2626", high: "#ea580c", medium: "#d97706", low: "#16a34a" }[item.urgency_level] || "#6b7280";
+                  const isNew = !!item._isNew;
+
+                  // Format timestamp
+                  let dateStr = "";
+                  let timeStr = "";
+                  if (item.ts) {
+                    const d = new Date(item.ts);
+                    dateStr = d.toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "numeric" });
+                    timeStr = d.toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" });
+                  }
+
+                  return (
+                    <div key={idx} className={`convHistoryItem ${isNew ? "convHistoryItem--new" : ""}`}>
+                      {/* Date-time + channel row */}
+                      <div className="convHistoryMeta">
+                        <span className="convHistoryTime">{dateStr}{timeStr ? ` · ${timeStr}` : ""}</span>
+                        <span className={`channelBadge channelBadge--${item.message_type}`}>{channelIcon} {item.channel_label?.replace(/💬|🌐|⭐|📢/g, "").trim()}</span>
+                        {item.category && (
+                          <span className={`catBadge catBadge--${item.category}`}>{item.category.replace(/_/g, " ")}</span>
+                        )}
+                        {item.urgency_level && (
+                          <span className="convUrgencyDot" style={{ background: urgencyColor }} title={item.urgency_level} />
+                        )}
+                      </div>
+
+                      {/* Guest message bubble */}
+                      <div className="convMsgBubble convMsgBubble--guest">
+                        <span className="convMsgAuthor">{item.author || "Guest"}</span>
+                        <p className="convMsgText">{item.content}</p>
+                      </div>
+
+                      {/* Response bubble (if any) */}
+                      {item.reply_text && (
+                        <div className="convMsgBubble convMsgBubble--hotel">
+                          <span className="convMsgAuthor">
+                            Hotel
+                            {item.ops_action && (
+                              <span className={`convOpsTag convOpsTag--${item.ops_action}`}>{
+                                { auto_replied: "auto", approved: "ops ✓", edited: "ops ✎", rejected: "rejected", pending: "pending", escalated: "escalated" }[item.ops_action] || item.ops_action
+                              }</span>
+                            )}
+                          </span>
+                          <p className="convMsgText">{item.reply_text}</p>
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+                <div ref={historyBottomRef} />
+              </div>
+            </div>
           </div>
         )}
 

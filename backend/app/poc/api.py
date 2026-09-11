@@ -1434,7 +1434,7 @@ def process_incoming_message(payload: ProcessMessageRequest) -> dict[str, Any]:
         pass
 
     # ── Stage 1: Classify ─────────────────────────────────────────────────────
-    classification = classify_message(message)
+    classification = classify_message(message, message_type=payload.message_type)
 
     triage_state = "reply_now"
     auto_answered = False
@@ -1508,6 +1508,7 @@ def process_incoming_message(payload: ProcessMessageRequest) -> dict[str, Any]:
             classification=classification,
             interaction_id=payload.interaction_id,
             auto_answer_draft=suggested_reply_only,
+            message_type=payload.message_type,
         )
         escalation_packet_dict = packet.to_dict()
         triage_state = packet.triage_state
@@ -1531,6 +1532,8 @@ def process_incoming_message(payload: ProcessMessageRequest) -> dict[str, Any]:
         "message_content": message,
         "client_id": client_id,
         "client_name": client_name,
+        "message_type": payload.message_type,
+        "channel_label": classification.channel_label,
         "classification": classification.to_dict(),
         "auto_answered": auto_answered,
         "auto_answer_draft": auto_answer_draft,
@@ -1543,6 +1546,107 @@ def process_incoming_message(payload: ProcessMessageRequest) -> dict[str, Any]:
         "escalation_packet": escalation_packet_dict,
         "triage_state": triage_state,
     }
+
+
+@router.get("/conversation-history")
+def get_conversation_history(client_id: int, days: int = 30) -> dict[str, Any]:
+    """
+    Return the last `days` days of messages for a client, joined with any
+    ops response logged in auto_response_log, ordered chronologically
+    (oldest first so the frontend can simply append new messages at the bottom).
+    """
+    cutoff = (datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
+              - __import__("datetime").timedelta(days=days)
+              ).strftime("%Y-%m-%d")
+
+    # Fetch messages from jx_bridge.messages
+    messages_rows = repository.execute_query(
+        """
+        SELECT
+            m.message_id,
+            m.source_timestamp  AS ts,
+            m.content,
+            m.author,
+            m.type              AS message_type,
+            m.message_category  AS category,
+            m.urgency_level,
+            m.requires_ops_action,
+            m.ops_action_type,
+            tt.triage           AS triage_state
+        FROM jx_bridge.messages m
+        LEFT JOIN jx_bridge.thread_triage tt ON tt.interaction_id = m.interaction_id
+        WHERE m.client_id = :client_id
+          AND m.source_timestamp >= :cutoff
+        ORDER BY m.source_timestamp ASC
+        LIMIT 200
+        """,
+        {"client_id": client_id, "cutoff": cutoff},
+    )
+
+    # Fetch logged responses for those messages
+    response_rows = repository.execute_query(
+        """
+        SELECT
+            message_id,
+            category,
+            urgency_level,
+            draft_answer,
+            final_answer,
+            ops_action,
+            confidence,
+            inserted_datetime   AS ts
+        FROM jx_bridge.auto_response_log
+        WHERE client_id = :client_id
+          AND inserted_datetime >= :cutoff
+        ORDER BY inserted_datetime ASC
+        """,
+        {"client_id": client_id, "cutoff": cutoff},
+    )
+
+    # Index responses by message_id for quick join
+    resp_by_msg: dict[int, list[dict]] = {}
+    for r in response_rows:
+        mid = r.get("message_id")
+        if mid is not None:
+            resp_by_msg.setdefault(int(mid), []).append(dict(r))
+
+    # Channel label map
+    channel_labels = {
+        "messages": "💬 Direct Message",
+        "comments": "🌐 Social Comment",
+        "review":   "⭐ Platform Review",
+        "mentions": "📢 Brand Mention",
+    }
+
+    history = []
+    for row in messages_rows:
+        mid = row.get("message_id")
+        msg_type = str(row.get("message_type") or "messages")
+        responses = resp_by_msg.get(int(mid), []) if mid is not None else []
+
+        # Pick the best response to display (prefer final_answer → draft_answer)
+        reply_text = None
+        ops_action = None
+        if responses:
+            latest = responses[-1]
+            reply_text = latest.get("final_answer") or latest.get("draft_answer")
+            ops_action = latest.get("ops_action")
+
+        history.append({
+            "message_id":    mid,
+            "ts":            row.get("ts"),
+            "content":       row.get("content"),
+            "author":        row.get("author") or "Guest",
+            "message_type":  msg_type,
+            "channel_label": channel_labels.get(msg_type, "📨 Message"),
+            "category":      row.get("category"),
+            "urgency_level": row.get("urgency_level"),
+            "triage_state":  row.get("triage_state"),
+            "reply_text":    reply_text,
+            "ops_action":    ops_action,
+        })
+
+    return {"client_id": client_id, "days": days, "history": history}
 
 
 @router.post("/process-message/ops-decision")

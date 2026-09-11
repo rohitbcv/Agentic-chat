@@ -619,6 +619,55 @@ body {
   border-color: var(--accent);
 }
 
+/* ── Inbox channel selector bar ──────────────────────────────── */
+.inboxChannelBar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.inboxChannelLabel {
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+  color: var(--text-xmuted);
+  margin-right: 2px;
+}
+.inboxChannelBtn {
+  padding: 4px 11px;
+  border: 1px solid var(--border);
+  border-radius: 20px;
+  background: var(--bg);
+  color: var(--text-muted);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+.inboxChannelBtn:hover { border-color: var(--accent); color: var(--accent); }
+.inboxChannelBtn--active {
+  background: var(--accent);
+  color: #fff;
+  border-color: var(--accent);
+}
+
+/* ── Channel badge in results ─────────────────────────────────── */
+.channelBadge {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 2px 8px;
+  border-radius: 20px;
+  font-size: 11px;
+  font-weight: 600;
+  border: 1px solid transparent;
+}
+.channelBadge--messages { background: #ede9fe; color: #5b21b6; border-color: #c4b5fd; }
+.channelBadge--comments { background: #dbeafe; color: #1d4ed8; border-color: #93c5fd; }
+.channelBadge--review   { background: #fef9c3; color: #854d0e; border-color: #fde047; }
+.channelBadge--mentions { background: #fce7f3; color: #9d174d; border-color: #f9a8d4; }
+
 /* ── Inbox main panel (full-width) ────────────────────────────── */
 .inboxMainPanel {
   display: flex;
@@ -715,6 +764,154 @@ body {
   height: 1px;
   background: var(--border-light);
 }
+
+/* ── Conversation History Panel ───────────────────────────────── */
+.convHistoryPanel {
+  margin-top: 24px;
+  border-top: 1px solid var(--border);
+  padding-top: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  max-width: 780px;
+}
+
+.convHistoryHeader {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.convHistoryTitle {
+  font-size: 13.5px;
+  font-weight: 700;
+  color: var(--text);
+  margin: 0;
+  flex: 1;
+}
+.convHistoryLoading {
+  font-size: 11px;
+  color: var(--text-xmuted);
+  font-style: italic;
+}
+.convHistoryCount {
+  font-size: 11px;
+  color: var(--text-muted);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 20px;
+  padding: 1px 8px;
+}
+.convHistoryEmpty {
+  font-size: 12.5px;
+  color: var(--text-xmuted);
+  font-style: italic;
+  margin: 0;
+}
+
+.convHistoryList {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  max-height: 480px;
+  overflow-y: auto;
+  padding-right: 4px;
+}
+.convHistoryList::-webkit-scrollbar { width: 4px; }
+.convHistoryList::-webkit-scrollbar-track { background: transparent; }
+.convHistoryList::-webkit-scrollbar-thumb { background: var(--border); border-radius: 4px; }
+
+/* Individual history item */
+.convHistoryItem {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px 12px;
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius);
+  background: var(--surface);
+  transition: box-shadow 0.2s;
+}
+.convHistoryItem:hover { box-shadow: 0 1px 6px rgba(0,0,0,0.06); }
+.convHistoryItem--new {
+  border-color: var(--accent);
+  background: #f5f3ff;
+  box-shadow: 0 0 0 2px rgba(124,58,237,0.10);
+}
+
+/* Meta row: timestamp + channel badge + category badge + urgency dot */
+.convHistoryMeta {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.convHistoryTime {
+  font-size: 11px;
+  color: var(--text-xmuted);
+  font-variant-numeric: tabular-nums;
+}
+.convUrgencyDot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  margin-left: 2px;
+}
+
+/* Chat bubbles */
+.convMsgBubble {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 7px 10px;
+  border-radius: var(--radius-sm);
+  max-width: 90%;
+}
+.convMsgBubble--guest {
+  align-self: flex-start;
+  background: var(--bg);
+  border: 1px solid var(--border-light);
+  border-left: 3px solid #a78bfa;
+}
+.convMsgBubble--hotel {
+  align-self: flex-end;
+  background: #f0fdf4;
+  border: 1px solid #bbf7d0;
+  border-right: 3px solid #16a34a;
+}
+.convMsgAuthor {
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+  color: var(--text-xmuted);
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+.convMsgText {
+  font-size: 12.5px;
+  color: var(--text);
+  line-height: 1.5;
+  margin: 0;
+  white-space: pre-wrap;
+}
+
+/* Ops action tag inside author line */
+.convOpsTag {
+  font-size: 9px;
+  font-weight: 700;
+  padding: 1px 5px;
+  border-radius: 4px;
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
+}
+.convOpsTag--auto_replied { background: #d1fae5; color: #065f46; }
+.convOpsTag--approved     { background: #d1fae5; color: #065f46; }
+.convOpsTag--edited       { background: #dbeafe; color: #1e40af; }
+.convOpsTag--rejected     { background: #fee2e2; color: #991b1b; }
+.convOpsTag--pending      { background: #fef3c7; color: #92400e; }
+.convOpsTag--escalated    { background: #fef3c7; color: #92400e; }
 
 /* ── Inbox Monitor (left panel, legacy — kept for inboxSamples reuse) ── */
 .inboxMonitor {

@@ -163,6 +163,8 @@ def _generate_escalation_suggestions(
     ops_action_type: str | None,
     context: list[dict[str, Any]],
     entities: dict[str, Any],
+    channel_label: str = "Direct Message",
+    is_public_channel: bool = False,
 ) -> tuple[str | None, str | None]:
     """Returns (suggested_reply, suggested_action)."""
     api_key = (getenv("OPENAI_API_KEY") or "").strip()
@@ -170,8 +172,10 @@ def _generate_escalation_suggestions(
 
     if not api_key:
         # Deterministic fallback
-        reply = _deterministic_escalation_reply(message, category, context)
+        reply = _deterministic_escalation_reply(message, category, context, is_public_channel)
         action = OPS_ACTION_LABELS.get(ops_action_type or "", "Review and respond to guest message")
+        if is_public_channel:
+            action += f" (⚠ Public {channel_label} — reply is visible to all)"
         return reply, action
 
     context_block = ""
@@ -184,9 +188,15 @@ def _generate_escalation_suggestions(
     if any(entities.values()):
         entity_block = f"\nExtracted details: {json.dumps(entities, ensure_ascii=False)}"
 
+    # Channel note instructs LLM to adjust tone for public vs private
+    channel_note = (
+        f"Source channel: {channel_label} ({'PUBLIC — reply will be seen by everyone' if is_public_channel else 'PRIVATE — reply goes only to the guest'})"
+    )
+
     input_text = (
         f"Hotel: {client_name}\n"
         f"Message category: {category}\n"
+        f"{channel_note}\n"
         f"Action needed: {OPS_ACTION_LABELS.get(ops_action_type or '', 'Handle guest request')}\n"
         f"Guest message: {message[:600]}\n"
         f"{context_block}{entity_block}"
@@ -205,10 +215,15 @@ def _generate_escalation_suggestions(
         raw = str(getattr(response, "output_text", "") or "").strip()
         raw = re.sub(r"^```(?:json)?\s*", "", raw).rstrip("` \n")
         data = json.loads(raw)
-        return data.get("suggested_reply"), data.get("suggested_action")
+        suggested_action = data.get("suggested_action")
+        if is_public_channel and suggested_action:
+            suggested_action += f" (⚠ Public {channel_label})"
+        return data.get("suggested_reply"), suggested_action
     except Exception:
-        reply = _deterministic_escalation_reply(message, category, context)
+        reply = _deterministic_escalation_reply(message, category, context, is_public_channel)
         action = OPS_ACTION_LABELS.get(ops_action_type or "", "Review and respond to guest message")
+        if is_public_channel:
+            action += f" (⚠ Public {channel_label})"
         return reply, action
 
 
@@ -216,6 +231,7 @@ def _deterministic_escalation_reply(
     message: str,
     category: str,
     context: list[dict[str, Any]],
+    is_public_channel: bool = False,
 ) -> str:
     """Fallback reply when LLM is unavailable."""
     templates = {
@@ -225,6 +241,10 @@ def _deterministic_escalation_reply(
         "crisis": "We are treating this as an urgent matter. Our team has been alerted and will respond immediately. Please stay safe.",
         "external_dm": "Thank you for your interest in staying with us. Our reservations team will be in touch shortly with availability and rates.",
     }
+    # Public channels (reviews, comments) get a slightly more polished opener
+    if is_public_channel:
+        templates["complaint"] = "Thank you for your feedback. We are truly sorry to hear about your experience and take this matter very seriously. A member of our team will be in touch with you directly to make this right."
+
     base = templates.get(category, "Thank you for your message. Our team will review and respond to you shortly.")
     if context:
         snippet = context[0].get("excerpt", "")[:150].rstrip(".")
@@ -293,6 +313,7 @@ def build_escalation_packet(
     classification: "Any",           # ClassificationResult from message_classifier
     interaction_id: int | None = None,
     auto_answer_draft: str | None = None,   # partial draft from auto-answer (confidence 0.70-0.89)
+    message_type: str = "messages",  # comments | messages | review | mentions
 ) -> EscalationPacket:
     """
     Build an escalation packet for ops team review.
@@ -304,12 +325,24 @@ def build_escalation_packet(
         classification: ClassificationResult from message_classifier
         interaction_id: existing interaction_id if available
         auto_answer_draft: partial FAQ draft (if confidence was 0.70-0.89)
+        message_type: source channel — affects tone and urgency context for ops
 
     Returns:
         EscalationPacket
     """
     urgency = classification.urgency_level
     triage_state = "escalated_crisis" if urgency == "critical" else "pending_ops_approval"
+
+    # Channel label for ops packet display
+    channel_label = getattr(classification, "channel_label", None) or {
+        "comments": "Public Social Comment",
+        "messages": "Private Direct Message",
+        "review":   "Public Platform Review",
+        "mentions": "Social Media Mention",
+    }.get(message_type, "Direct Message")
+
+    # Public channel flag — affects suggested_action wording
+    is_public_channel = message_type in ("comments", "review", "mentions")
 
     # Get relevant context
     context = _get_relevant_context(client_id, message)
@@ -322,6 +355,8 @@ def build_escalation_packet(
             classification.ops_action_type or "",
             "Review and confirm the draft reply before sending"
         )
+        if is_public_channel:
+            suggested_action += f" (⚠ Public {channel_label} — reply is visible to all)"
     else:
         suggested_reply, suggested_action = _generate_escalation_suggestions(
             message=message,
@@ -330,6 +365,8 @@ def build_escalation_packet(
             ops_action_type=classification.ops_action_type,
             context=context,
             entities=entities,
+            channel_label=channel_label,
+            is_public_channel=is_public_channel,
         )
 
     # Create alert if we have an interaction_id
@@ -338,6 +375,7 @@ def build_escalation_packet(
         packet_preview = json.dumps({
             "category": classification.category,
             "urgency": urgency,
+            "channel": channel_label,
             "suggested_reply": (suggested_reply or "")[:200],
         }, ensure_ascii=False)
         alert_id = _create_alert(interaction_id, client_id, urgency, packet_preview)

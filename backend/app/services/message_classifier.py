@@ -119,6 +119,58 @@ URGENCY_OVERRIDES: dict[str, str] = {
     "spam":           "low",
 }
 
+# ── Channel (message_type) rules ──────────────────────────────────────────────
+# Source channel carries strong signal independent of content.
+#
+# comments  — public comment on a social post; complaints here are reputationally
+#             sensitive and should be bumped to at least 'medium'
+# messages  — private/direct DM from a current or incoming guest; treat as normal
+# review    — public platform review (TripAdvisor, Google, Booking.com);
+#             negative sentiment is always a public-reputation complaint
+# mentions  — brand mention on social media; usually external_dm or spam unless
+#             it already classified as crisis/complaint
+
+CHANNEL_CATEGORY_OVERRIDES: dict[str, dict[str, str]] = {
+    # review channel: if content looks positive → appreciation, else → complaint
+    "review": {
+        "question":    "complaint",   # a review asking a question is likely a negative review
+        "external_dm": "complaint",
+        "spam":        "spam",        # keep spam as spam
+    },
+    # mentions channel: external interest unless already actionable
+    "mentions": {
+        "question":    "external_dm",
+        "appreciation": "appreciation",   # positive mention is fine
+    },
+}
+
+CHANNEL_URGENCY_FLOOR: dict[str, dict[str, str]] = {
+    # Public channels raise the urgency floor because of reputational impact
+    "comments": {
+        "complaint":   "high",    # public complaint → high urgency
+        "crisis":      "critical",
+    },
+    "review": {
+        "complaint":   "high",    # bad review → high urgency
+        "crisis":      "critical",
+        "appreciation":"low",
+    },
+    "mentions": {
+        "complaint":   "medium",
+        "crisis":      "critical",
+    },
+    # Private DM: standard urgency from content is fine
+    "messages": {},
+}
+
+# Channel human-readable labels for ops context
+CHANNEL_LABELS: dict[str, str] = {
+    "comments": "Public Social Comment",
+    "messages": "Private Direct Message",
+    "review":   "Public Platform Review",
+    "mentions": "Social Media Mention",
+}
+
 HIGH_URGENCY_KEYWORDS = [
     "flight delayed", "flight delay", "emergency", "urgent", "asap", "immediately",
     "right now", "help me", "can't wait", "cannot wait", "as soon as possible",
@@ -166,6 +218,8 @@ class ClassificationResult:
     confidence: float
     entities: ExtractedEntities
     classification_method: str   # "rule_based" | "llm" | "llm_fallback_rule"
+    message_type: str = "messages"       # comments | messages | review | mentions
+    channel_label: str = "Private Direct Message"
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -176,6 +230,8 @@ class ClassificationResult:
             "confidence": self.confidence,
             "entities": self.entities.to_dict(),
             "classification_method": self.classification_method,
+            "message_type": self.message_type,
+            "channel_label": self.channel_label,
         }
 
 
@@ -324,6 +380,7 @@ def _llm_classify(text: str) -> ClassificationResult | None:
 def classify_message(
     text: str,
     *,
+    message_type: str = "messages",
     use_llm_fallback: bool = True,
     llm_confidence_threshold: float = 0.72,
 ) -> ClassificationResult:
@@ -332,12 +389,20 @@ def classify_message(
 
     Args:
         text: raw guest message content
+        message_type: source channel — "comments" | "messages" | "review" | "mentions"
+                      Influences category and urgency independently of content.
         use_llm_fallback: if True, send low-confidence messages to LLM
         llm_confidence_threshold: rule-based confidence below this triggers LLM
 
     Returns:
         ClassificationResult
     """
+    # Normalise channel
+    message_type = (message_type or "messages").lower().strip()
+    if message_type not in CHANNEL_LABELS:
+        message_type = "messages"
+    channel_label = CHANNEL_LABELS[message_type]
+
     text = (text or "").strip()
     if not text:
         return ClassificationResult(
@@ -348,6 +413,8 @@ def classify_message(
             confidence=0.0,
             entities=ExtractedEntities(),
             classification_method="rule_based",
+            message_type=message_type,
+            channel_label=channel_label,
         )
 
     text_lower = text.lower()
@@ -355,7 +422,22 @@ def classify_message(
     # Rule-based pass
     category, confidence = _rule_based_classify(text)
 
-    # Apply urgency overrides
+    # ── Channel-based category override ──────────────────────────────────────
+    # Apply before urgency so the corrected category feeds into urgency lookup.
+    channel_cat_overrides = CHANNEL_CATEGORY_OVERRIDES.get(message_type, {})
+    if category in channel_cat_overrides:
+        category = channel_cat_overrides[category]
+        # Slightly lower confidence because we relied on channel signal, not content
+        confidence = min(confidence, 0.82)
+
+    # ── Special case: review channel with negative-leaning content ───────────
+    # If a review doesn't already classify as crisis/complaint/appreciation,
+    # treat it as a complaint (reviews are rarely neutral operational queries).
+    if message_type == "review" and category not in ("crisis", "complaint", "appreciation", "spam"):
+        category = "complaint"
+        confidence = min(confidence, 0.78)
+
+    # Apply urgency overrides based on (possibly corrected) category
     urgency = URGENCY_OVERRIDES.get(category, "low")
 
     # Upgrade urgency if high-urgency keywords found
@@ -363,11 +445,23 @@ def classify_message(
         if urgency not in ("critical",):
             urgency = "high"
 
+    # ── Channel-based urgency floor ───────────────────────────────────────────
+    # Public channels carry reputational risk — apply a minimum urgency.
+    channel_urgency_floors = CHANNEL_URGENCY_FLOOR.get(message_type, {})
+    urgency_rank = {"low": 0, "medium": 1, "high": 2, "critical": 3}
+    floor = channel_urgency_floors.get(category)
+    if floor and urgency_rank.get(urgency, 0) < urgency_rank.get(floor, 0):
+        urgency = floor
+
     # Detect ops action
     ops_action = _detect_ops_action(text_lower)
     requires_ops = REQUIRES_OPS_BY_CATEGORY.get(category, False)
     # If ops action detected, ensure requires_ops is True
     if ops_action:
+        requires_ops = True
+
+    # Public channel complaints/mentions always require ops awareness
+    if message_type in ("comments", "review", "mentions") and category in ("complaint", "crisis"):
         requires_ops = True
 
     entities = _extract_entities(text)
@@ -380,12 +474,21 @@ def classify_message(
         confidence=confidence,
         entities=entities,
         classification_method="rule_based",
+        message_type=message_type,
+        channel_label=channel_label,
     )
 
     # LLM fallback for ambiguous messages
     if use_llm_fallback and confidence < llm_confidence_threshold:
         llm_result = _llm_classify(text)
         if llm_result:
+            # Stamp channel info onto LLM result too
+            llm_result.message_type = message_type
+            llm_result.channel_label = channel_label
+            # Still apply channel urgency floor to LLM result
+            floor = channel_urgency_floors.get(llm_result.category)
+            if floor and urgency_rank.get(llm_result.urgency_level, 0) < urgency_rank.get(floor, 0):
+                llm_result.urgency_level = floor
             return llm_result
         # LLM failed — return rule result but mark it
         result.classification_method = "llm_fallback_rule"
