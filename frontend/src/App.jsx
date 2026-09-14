@@ -430,11 +430,6 @@ export default function App() {
         {/* ── Inbox Monitor view ───────────────────────────────────────────── */}
         {mainView === "inbox" && (
           <div className="inboxMainPanel">
-            <div className="inboxMainHeader">
-              <h4 className="inboxMainTitle">Guest Message Processor</h4>
-              <p className="inboxMainSub">Paste any incoming guest message. The system will classify it, auto-reply if confident, or escalate with a suggested reply for your review.</p>
-            </div>
-
             {/* Channel selector */}
             <div className="inboxChannelBar">
               <span className="inboxChannelLabel">Source channel:</span>
