@@ -1293,6 +1293,20 @@ def seed_inbox_events(conn: sqlite3.Connection) -> None:
         ("booking_related",  "medium",   1, "rate_inquiry"),         # group booking rates
         ("complaint",        "medium",   1, "complaint_followup"),   # check-in delay
     ]
+    TEMPLATE_PROPERTY_REPLIES = [
+        "Airport pickup can be arranged. Please share the flight number at least 24 hours before arrival.",
+        "Housekeeping will reclean the room today. We apologise and will offer a late checkout as a courtesy.",
+        "Dinner service in the main restaurant runs from 6:30 PM to 10:30 PM; reservations are recommended.",
+        "We have corrected the booking dates in the PMS. Please ask the guest to check the updated confirmation email.",
+        "Late checkout until 1 PM is approved if the room is available; confirm on the morning of departure.",
+        "Parking is available on-site at $25 per night. Please have the guest collect a pass from reception.",
+        "The closest major event venue is about 20 minutes by taxi from the hotel.",
+        "We have moved the guest to a quieter room on a higher floor and offered complimentary breakfast.",
+        "The pool is open daily from 7:00 AM to 9:00 PM.",
+        "Breakfast is included with this rate. Loyalty points can be added if the guest shares their membership number.",
+        "Group rates start from a 10-room minimum. Sales will send a quote within one business day.",
+        "Check-in delay was due to an early arrival. The room is ready now and a welcome drink has been offered.",
+    ]
 
     interaction_rows = []
     message_rows = []
@@ -1332,7 +1346,8 @@ def seed_inbox_events(conn: sqlite3.Connection) -> None:
             if triage in {"waiting_on_property", "property_responded"}:
                 alert_rows.append((alert_id, interaction_id, "sent", dt(day_offset), None))
                 if triage == "property_responded":
-                    reply_rows.append((alert_id, alert_id, "Property confirmed the answer.", dt(day_offset + 1), None))
+                    property_reply = TEMPLATE_PROPERTY_REPLIES[tmpl_idx % len(TEMPLATE_PROPERTY_REPLIES)]
+                    reply_rows.append((alert_id, alert_id, property_reply, dt(day_offset + 1), None))
                 alert_id += 1
             interaction_id += 1
             message_id += 1

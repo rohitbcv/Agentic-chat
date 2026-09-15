@@ -32,8 +32,8 @@ export default function App() {
   const [isSending, setIsSending] = useState(false);
   const [lastResponse, setLastResponse] = useState(null);
   const [error, setError] = useState("");
-  const [leftTab, setLeftTab] = useState("samples");
-  const [mainView, setMainView] = useState("chat"); // "chat" | "inbox"
+  const [leftTab, setLeftTab] = useState("inboxsamples");
+  const [mainView, setMainView] = useState("inbox"); // "chat" | "inbox" — Q&A Chat commented out
   const messageListRef = useRef(null);
 
   // ── Inbox Monitor state ─────────────────────────────────────────────────
@@ -204,6 +204,14 @@ export default function App() {
           message_content: msg,
           client_id: clientId,
           message_type: inboxMessageType,
+          conversation_history: convHistory.slice(-5).map((item) => ({
+            content: item.content || "",
+            reply_text: item.reply_text || "",
+            category: item.category || null,
+            triage_state: item.triage_state || null,
+            ts: item.ts || null,
+            author: item.author || "Guest",
+          })),
         }),
       });
       if (!res.ok) throw new Error(`Request failed: ${res.status}`);
@@ -271,8 +279,6 @@ export default function App() {
 
   // ── Left panel tabs ────────────────────────────────────────────────────────
   const LEFT_TABS = [
-    { id: "samples",       label: "Samples" },
-    { id: "validation",    label: "Validation" },
     { id: "inboxsamples",  label: "📬 Inbox" },
   ];
 
@@ -321,7 +327,7 @@ export default function App() {
           )}
         </div>
 
-        {/* Tab bar */}
+        {/* Tab bar — Samples and Validation hidden; Inbox samples only
         <div className="leftTabBar">
           {LEFT_TABS.map((t) => (
             <button
@@ -334,49 +340,53 @@ export default function App() {
             </button>
           ))}
         </div>
+        */}
 
         {/* Tab content */}
         <div className="leftTabContent">
+          {/* Samples tab hidden
           {leftTab === "samples" && (
             <div className="chipList">
               {(config?.sample_queries || []).map((q) => (
-                <button className="queryChip" key={q} type="button" onClick={() => { setMainView("chat"); runQuery(q); }}>
+                <button className="queryChip" key={q} type="button" onClick={() => { runQuery(q); }}>
                   {q}
                 </button>
               ))}
             </div>
           )}
+          */}
 
-          {leftTab === "inboxsamples" && (
-            <div className="inboxSamples inboxSamples--tab">
-              <p className="probeNote">Click a sample to load it into the Inbox Monitor.</p>
-              {[
-                { label: "Routine question",        msg: "Is this hotel pet-friendly?" },
-                { label: "Policy query",            msg: "What time is check-in and check-out?" },
-                { label: "In-house request (cab)",  msg: "Hi, my flight is delayed and I need to change my cab from 12 PM to 2 PM. Can you help?" },
-                { label: "Complaint",               msg: "I'm very unhappy. The room was dirty and no one came to fix it after 3 hours." },
-                { label: "Appreciation",            msg: "Thank you so much for the wonderful stay! The staff were incredibly helpful." },
-                { label: "Crisis",                  msg: "There is smoke coming from the room next to mine, I think there might be a fire!" },
-                { label: "Booking issue",           msg: "I booked for September 28th but my confirmation says October 28th. This is incorrect." },
-              ].map((s) => (
-                <button
-                  key={s.label}
-                  className="inboxSampleBtn"
-                  type="button"
-                  onClick={() => { setMainView("inbox"); setInboxInput(s.msg); }}
-                >
-                  <span className="inboxSampleLabel">{s.label}</span>
-                  <span className="inboxSampleMsg">{s.msg}</span>
-                </button>
-              ))}
-            </div>
-          )}
+          <div className="inboxSamples inboxSamples--tab">
+            <p className="probeNote">Click a sample to load it into the Inbox Monitor.</p>
+            {[
+              { label: "Routine question",        msg: "Is this hotel pet-friendly?" },
+              { label: "Policy query",            msg: "What time is check-in and check-out?" },
+              { label: "In-house request (cab)",  msg: "Hi, my flight is delayed and I need to change my cab from 12 PM to 2 PM. Can you help?" },
+              { label: "Lost item (bag)",         msg: "Hi. My husband accidentally left behind a clear bag with the NY Giants logo on it with 3 water bottles in it. If you find it, would you be able to hold it for us until Tuesday?" },
+              { label: "Lost item follow-up",     msg: "Is my bag safe? I am coming to pick it up — is my bag found?" },
+              { label: "Complaint",               msg: "I'm very unhappy. The room was dirty and no one came to fix it after 3 hours." },
+              { label: "Appreciation",            msg: "Thank you so much for the wonderful stay! The staff were incredibly helpful." },
+              { label: "Crisis",                  msg: "There is smoke coming from the room next to mine, I think there might be a fire!" },
+              { label: "Booking issue",           msg: "I booked for September 28th but my confirmation says October 28th. This is incorrect." },
+            ].map((s) => (
+              <button
+                key={s.label}
+                className="inboxSampleBtn"
+                type="button"
+                onClick={() => { setMainView("inbox"); setInboxInput(s.msg); }}
+              >
+                <span className="inboxSampleLabel">{s.label}</span>
+                <span className="inboxSampleMsg">{s.msg}</span>
+              </button>
+            ))}
+          </div>
 
+          {/* Validation tab hidden
           {leftTab === "validation" && (
             <div className="probeList">
               <p className="probeNote">Each probe targets a specific validation stage.</p>
               {(config?.validation_sample_queries || []).map((item) => (
-                <button className="probeCard" key={item.query} type="button" onClick={() => { setMainView("chat"); runQuery(item.query); }}>
+                <button className="probeCard" key={item.query} type="button" onClick={() => { runQuery(item.query); }}>
                   <span className="probeLabel">{item.label}</span>
                   <span className="probeQuery">{item.query}</span>
                   {item.checks ? <span className="probeChecks">{item.checks}</span> : null}
@@ -384,7 +394,7 @@ export default function App() {
               ))}
             </div>
           )}
-
+          */}
         </div>
       </aside>
 
@@ -395,6 +405,7 @@ export default function App() {
           <div className="mainTopBarLeft">
             <span className="mainTopBarEyebrow">Smart Community Inbox</span>
             <div className="mainViewToggle">
+              {/* Q&A Chat temporarily hidden
               <button
                 className={`mainViewBtn ${mainView === "chat" ? "mainViewBtn--active" : ""}`}
                 type="button"
@@ -402,6 +413,7 @@ export default function App() {
               >
                 💬 Q&amp;A Chat
               </button>
+              */}
               <button
                 className={`mainViewBtn ${mainView === "inbox" ? "mainViewBtn--active" : ""}`}
                 type="button"
@@ -493,6 +505,12 @@ export default function App() {
                       {" "}{inboxResult.channel_label}
                     </span>
                   )}
+                  {inboxResult.used_conversation_context && (
+                    <span className="inboxConfBadge">Used last {inboxResult.conversation_turns_used || 5} conversation turns</span>
+                  )}
+                  {inboxResult.used_prior_property_response && (
+                    <span className="inboxConfBadge">Reused earlier property reply — not re-asked</span>
+                  )}
                   <span className="classMethod">{inboxResult.classification?.classification_method}</span>
                   <span className="classConf">conf {Math.round((inboxResult.classification?.confidence || 0) * 100)}%</span>
                   <span className="inboxTriagePill">Triage: <strong>{inboxResult.triage_state}</strong></span>
@@ -549,9 +567,19 @@ export default function App() {
                         </div>
                       )}
 
+                      {isPendingReply && inboxResult.auto_answer_source_excerpt && (
+                        <div className="inboxSourceNote">
+                          Source: FAQ / property details — "{inboxResult.auto_answer_source_excerpt.slice(0, 120)}…"
+                        </div>
+                      )}
+
                       {isAutoHigh && inboxResult.auto_answer_source_table && (
                         <div className="inboxSourceNote">
-                          Source: {inboxResult.auto_answer_source_table}
+                          Source: {inboxResult.auto_answer_source_table === "conversation_history"
+                            ? "earlier messages in this window"
+                            : inboxResult.used_prior_property_response
+                            ? "prior property response for this client"
+                            : inboxResult.auto_answer_source_table}
                           {inboxResult.auto_answer_source_excerpt ? ` — "${inboxResult.auto_answer_source_excerpt.slice(0, 120)}…"` : ""}
                         </div>
                       )}
@@ -655,8 +683,8 @@ export default function App() {
           </div>
         )}
 
-        {/* ── Chat Q&A view ─────────────────────────────────────────────────── */}
-        {mainView === "chat" && <>
+        {/* ── Chat Q&A view (temporarily hidden) ─────────────────────────────── */}
+        {false && mainView === "chat" && <>
 
         {/* Message list */}
         <div className="messageList" ref={messageListRef}>
@@ -821,7 +849,7 @@ export default function App() {
         </>}
       </main>
 
-      <TracePanel response={lastResponse} />
+      {/* <TracePanel response={lastResponse} /> */}
 
       {/* ── Property Chat Panel (right, appears on escalation) ── */}
       {mainView === "inbox" && inboxResult?.escalation_packet && (

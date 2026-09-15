@@ -17,7 +17,7 @@ from __future__ import annotations
 import json
 import re
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from os import getenv
 from pathlib import Path
 from typing import Any
@@ -165,6 +165,7 @@ def _generate_escalation_suggestions(
     entities: dict[str, Any],
     channel_label: str = "Direct Message",
     is_public_channel: bool = False,
+    conversation_history: list[dict[str, Any]] | None = None,
 ) -> tuple[str | None, str | None]:
     """Returns (suggested_reply, suggested_action)."""
     api_key = (getenv("OPENAI_API_KEY") or "").strip()
@@ -188,6 +189,13 @@ def _generate_escalation_suggestions(
     if any(entities.values()):
         entity_block = f"\nExtracted details: {json.dumps(entities, ensure_ascii=False)}"
 
+    history_block = ""
+    if conversation_history:
+        from .message_auto_answer import _format_conversation_history
+        formatted = _format_conversation_history(conversation_history)
+        if formatted:
+            history_block = f"\nRecent conversation history (last 5 exchanges):\n{formatted}\n"
+
     # Channel note instructs LLM to adjust tone for public vs private
     channel_note = (
         f"Source channel: {channel_label} ({'PUBLIC — reply will be seen by everyone' if is_public_channel else 'PRIVATE — reply goes only to the guest'})"
@@ -198,6 +206,7 @@ def _generate_escalation_suggestions(
         f"Message category: {category}\n"
         f"{channel_note}\n"
         f"Action needed: {OPS_ACTION_LABELS.get(ops_action_type or '', 'Handle guest request')}\n"
+        f"{history_block}"
         f"Guest message: {message[:600]}\n"
         f"{context_block}{entity_block}"
     )
@@ -251,6 +260,347 @@ def _deterministic_escalation_reply(
         if snippet:
             base += f" For your reference: {snippet}."
     return base
+
+
+# ── Prior property responses (last 2 months) ──────────────────────────────────
+
+PROPERTY_REPLY_LOOKBACK_DAYS = 60
+PROPERTY_EMBED_MATCH_THRESHOLD = 0.78
+PROPERTY_LEXICAL_MATCH_THRESHOLD = 0.40
+PROPERTY_COMBINED_MATCH_THRESHOLD = 0.70
+
+# In-memory Q&A for this process: questions already sent to property, plus answers.
+# Dummy DB writes are not committed, so this is the source of truth within a session.
+_PROPERTY_QA_MEMORY: list[dict[str, Any]] = []
+
+
+def _normalize_guest_query(text: str) -> str:
+    return re.sub(r"\s+", " ", re.sub(r"[^a-z0-9\s]", " ", (text or "").lower())).strip()
+
+
+def record_property_question_asked(client_id: int, guest_message: str) -> None:
+    """Remember that this guest question was already raised to the property."""
+    guest = (guest_message or "").strip()
+    if not client_id or not guest:
+        return
+    _PROPERTY_QA_MEMORY.append({
+        "client_id": int(client_id),
+        "guest_message": guest,
+        "property_reply": "",
+        "replied_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "source": "property_chat_asked",
+    })
+
+
+def record_property_answer(client_id: int, guest_message: str, property_reply: str) -> None:
+    """Remember a property team's answer so the same question is not asked again."""
+    guest = (guest_message or "").strip()
+    reply = (property_reply or "").strip()
+    if not client_id or not guest or not reply:
+        return
+    _PROPERTY_QA_MEMORY.append({
+        "client_id": int(client_id),
+        "guest_message": guest,
+        "property_reply": reply,
+        "replied_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "source": "property_chat",
+    })
+
+
+def _memory_candidates(client_id: int, *, answered_only: bool = True) -> list[dict[str, Any]]:
+    out: list[dict[str, Any]] = []
+    for item in _PROPERTY_QA_MEMORY:
+        if int(item.get("client_id") or 0) != int(client_id):
+            continue
+        guest = str(item.get("guest_message") or "").strip()
+        reply = str(item.get("property_reply") or "").strip()
+        if not guest:
+            continue
+        if answered_only and not reply:
+            continue
+        out.append({
+            "guest_message": guest,
+            "property_reply": reply,
+            "replied_at": item.get("replied_at"),
+            "source": str(item.get("source") or "property_chat"),
+        })
+    return out
+
+
+def _exact_query_match(query: str, candidates: list[dict[str, Any]]) -> dict[str, Any] | None:
+    needle = _normalize_guest_query(query)
+    if not needle:
+        return None
+    # Newest first so a later property answer wins over an earlier one.
+    for item in reversed(candidates):
+        hay = _normalize_guest_query(item.get("guest_message") or "")
+        if hay and hay == needle:
+            return item
+    return None
+
+
+@dataclass
+class PriorPropertyMatch:
+    guest_message: str
+    property_reply: str
+    score: float
+    source: str
+    replied_at: str | None = None
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "guest_message": self.guest_message[:400],
+            "property_reply": self.property_reply[:400],
+            "score": round(self.score, 3),
+            "source": self.source,
+            "replied_at": self.replied_at,
+        }
+
+
+def _cutoff_two_months() -> str:
+    return (datetime.now(timezone.utc) - timedelta(days=PROPERTY_REPLY_LOOKBACK_DAYS)).strftime("%Y-%m-%d")
+
+
+def _load_prior_property_responses(client_id: int) -> list[dict[str, Any]]:
+    """Load guest queries that already received a property reply in the last 2 months."""
+    from ..db import repository
+
+    cutoff = _cutoff_two_months()
+    candidates: list[dict[str, Any]] = _memory_candidates(client_id, answered_only=True)
+
+    try:
+        rows = repository.execute_query(
+            """
+            SELECT
+                m.content              AS guest_message,
+                ar.reply_text          AS property_reply,
+                ar.inserted_datetime   AS replied_at
+            FROM jx_bridge.alert_replies ar
+            JOIN jx_bridge.alerts a ON a.id = ar.alert_id
+            JOIN jx_bridge.interactions i ON i.interaction_id = a.interaction_id
+            JOIN jx_bridge.messages m ON m.interaction_id = i.interaction_id
+            WHERE i.client_id = :client_id
+              AND ar.deleted_at IS NULL
+              AND a.deleted_at IS NULL
+              AND ar.reply_text IS NOT NULL
+              AND TRIM(ar.reply_text) != ''
+              AND ar.inserted_datetime >= :cutoff
+            ORDER BY ar.inserted_datetime DESC
+            LIMIT 120
+            """,
+            {"client_id": client_id, "cutoff": cutoff},
+        )
+        for row in rows:
+            guest = str(row.get("guest_message") or "").strip()
+            reply = str(row.get("property_reply") or "").strip()
+            if guest and reply:
+                candidates.append({
+                    "guest_message": guest,
+                    "property_reply": reply,
+                    "replied_at": row.get("replied_at"),
+                    "source": "jx_bridge.alert_replies",
+                })
+    except Exception:
+        pass
+
+    try:
+        log_rows = repository.execute_query(
+            """
+            SELECT
+                source_excerpt,
+                draft_answer,
+                final_answer,
+                inserted_datetime AS replied_at
+            FROM jx_bridge.auto_response_log
+            WHERE client_id = :client_id
+              AND source_table IN ('property_chat', 'jx_bridge.alert_replies', 'prior_property_response')
+              AND inserted_datetime >= :cutoff
+            ORDER BY inserted_datetime DESC
+            LIMIT 80
+            """,
+            {"client_id": client_id, "cutoff": cutoff},
+        )
+        for row in log_rows:
+            excerpt = str(row.get("source_excerpt") or "").strip()
+            reply = str(row.get("final_answer") or row.get("draft_answer") or "").strip()
+            guest = excerpt
+            property_reply = reply
+            if excerpt.lower().startswith("guest:"):
+                parts = excerpt.split("Property:", 1)
+                guest = parts[0].replace("Guest:", "", 1).strip()
+                if len(parts) > 1:
+                    property_reply = parts[1].strip() or reply
+            if guest and property_reply:
+                candidates.append({
+                    "guest_message": guest,
+                    "property_reply": property_reply,
+                    "replied_at": row.get("replied_at"),
+                    "source": "jx_bridge.auto_response_log",
+                })
+    except Exception:
+        pass
+
+    # De-dupe by guest message prefix
+    seen: set[str] = set()
+    unique: list[dict[str, Any]] = []
+    for item in candidates:
+        key = re.sub(r"\s+", " ", item["guest_message"].lower())[:180]
+        if key in seen:
+            continue
+        seen.add(key)
+        unique.append(item)
+    return unique
+
+
+def _score_property_candidates(query: str, candidates: list[dict[str, Any]]) -> list[tuple[float, dict[str, Any]]]:
+    """Semantic + lexical ranking of prior guest queries against the new message."""
+    from .message_auto_answer import _lexical_score
+
+    if not query or not candidates:
+        return []
+
+    lex_scored = []
+    for item in candidates:
+        lex = _lexical_score(query, item["guest_message"])
+        lex_scored.append((lex, item))
+    lex_scored.sort(key=lambda x: x[0], reverse=True)
+
+    # Pre-filter noisy rows, keep a semantic shortlist
+    shortlist = [pair for pair in lex_scored if pair[0] >= 0.10][:40]
+    if not shortlist:
+        shortlist = lex_scored[:25]
+
+    try:
+        from .embeddings import cosine_similarity, embed_texts, embedding_enabled
+        if embedding_enabled() and shortlist:
+            texts = [query[:500]] + [item["guest_message"][:500] for _, item in shortlist]
+            vectors = embed_texts(texts)
+            query_vec = vectors[0]
+            ranked: list[tuple[float, dict[str, Any]]] = []
+            for idx, (lex, item) in enumerate(shortlist):
+                emb = cosine_similarity(query_vec, vectors[idx + 1])
+                combined = 0.40 * lex + 0.60 * float(emb)
+                ranked.append((combined, {**item, "lex_score": lex, "emb_score": round(float(emb), 4)}))
+            ranked.sort(key=lambda x: x[0], reverse=True)
+            return ranked
+    except Exception:
+        pass
+
+    return [(lex, item) for lex, item in shortlist]
+
+
+def _to_prior_match(item: dict[str, Any], score: float) -> PriorPropertyMatch:
+    return PriorPropertyMatch(
+        guest_message=item["guest_message"],
+        property_reply=str(item.get("property_reply") or ""),
+        score=float(score),
+        source=str(item.get("source") or "jx_bridge.alert_replies"),
+        replied_at=item.get("replied_at"),
+    )
+
+
+def _best_similar_candidate(
+    message: str,
+    candidates: list[dict[str, Any]],
+) -> PriorPropertyMatch | None:
+    if not message or not candidates:
+        return None
+
+    exact = _exact_query_match(message, candidates)
+    if exact:
+        return _to_prior_match(exact, 1.0)
+
+    ranked = _score_property_candidates(message, candidates)
+    if not ranked:
+        return None
+
+    score, item = ranked[0]
+    emb = float(item.get("emb_score") or 0.0)
+    lex = float(item.get("lex_score") or score)
+    matched = (
+        emb >= PROPERTY_EMBED_MATCH_THRESHOLD
+        or score >= PROPERTY_COMBINED_MATCH_THRESHOLD
+        or (emb == 0.0 and lex >= PROPERTY_LEXICAL_MATCH_THRESHOLD)
+        or lex >= 0.85
+    )
+    if not matched:
+        return None
+    return _to_prior_match(item, float(score))
+
+
+def find_similar_property_response(
+    message: str,
+    client_id: int,
+    extra_candidates: list[dict[str, Any]] | None = None,
+) -> PriorPropertyMatch | None:
+    """
+    If this client already received a property reply to the same/similar query
+    in the last 2 months (or this session's Property Chat), return the best match.
+    """
+    candidates = _load_prior_property_responses(client_id)
+    if extra_candidates:
+        candidates = list(candidates) + [
+            item for item in extra_candidates
+            if str(item.get("guest_message") or "").strip()
+            and str(item.get("property_reply") or "").strip()
+        ]
+    return _best_similar_candidate(message, candidates)
+
+
+def find_similar_unanswered_property_question(
+    message: str,
+    client_id: int,
+) -> PriorPropertyMatch | None:
+    """Same question already raised to property for this client, but not yet answered."""
+    asked = [
+        item for item in _memory_candidates(client_id, answered_only=False)
+        if not str(item.get("property_reply") or "").strip()
+    ]
+    return _best_similar_candidate(message, asked)
+
+
+_PRIOR_PROPERTY_REPLY_PROMPT = """
+You are a warm, professional hotel concierge.
+The property already answered a similar guest query in the last two months.
+Write a concise guest-facing reply using ONLY that earlier property answer.
+Do not invent new facts. Do not mention "previous guest", "alert", or "internal records".
+2-4 sentences. Start directly with the answer.
+""".strip()
+
+
+def draft_from_prior_property_response(
+    message: str,
+    client_name: str,
+    match: PriorPropertyMatch,
+) -> str:
+    """Turn a prior property reply into a guest-facing answer for the current query."""
+    api_key = (getenv("OPENAI_API_KEY") or "").strip()
+    model = (getenv("OPENAI_MODEL") or "gpt-5.4-mini").strip()
+    fallback = (
+        f"{match.property_reply.strip().rstrip('.')}. "
+        "Please let us know if you need anything else."
+    )
+    if not api_key:
+        return fallback
+    try:
+        from openai import OpenAI
+        client = OpenAI(api_key=api_key)
+        response = client.responses.create(
+            model=model,
+            instructions=_PRIOR_PROPERTY_REPLY_PROMPT,
+            input=(
+                f"Hotel: {client_name}\n"
+                f"Current guest message: {message[:600]}\n"
+                f"Similar earlier guest query: {match.guest_message[:600]}\n"
+                f"Property's earlier answer: {match.property_reply[:800]}"
+            ),
+            max_output_tokens=220,
+            temperature=0.2,
+        )
+        draft = str(getattr(response, "output_text", "") or "").strip()
+        return draft if len(draft) > 10 else fallback
+    except Exception:
+        return fallback
 
 
 # ── Alert creation ────────────────────────────────────────────────────────────
@@ -314,6 +664,7 @@ def build_escalation_packet(
     interaction_id: int | None = None,
     auto_answer_draft: str | None = None,   # partial draft from auto-answer (confidence 0.70-0.89)
     message_type: str = "messages",  # comments | messages | review | mentions
+    conversation_history: list[dict[str, Any]] | None = None,
 ) -> EscalationPacket:
     """
     Build an escalation packet for ops team review.
@@ -367,9 +718,13 @@ def build_escalation_packet(
             entities=entities,
             channel_label=channel_label,
             is_public_channel=is_public_channel,
+            conversation_history=conversation_history,
         )
 
     # Create alert if we have an interaction_id
+    # Remember this question was raised so a later identical ask is not sent again.
+    record_property_question_asked(client_id, message)
+
     alert_id = None
     if interaction_id:
         packet_preview = json.dumps({

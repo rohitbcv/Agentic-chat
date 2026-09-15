@@ -1283,8 +1283,26 @@ def run_agent_poc_chat(payload: PocChatRequest) -> dict[str, Any]:
 # ── Intelligent Inbox: Process Message ────────────────────────────────────────
 
 from ..services.message_classifier import classify_message
-from ..services.message_auto_answer import attempt_auto_answer, AUTO_ANSWER_THRESHOLD, SUGGESTED_REPLY_THRESHOLD
-from ..services.message_escalation import build_escalation_packet
+from ..services.message_auto_answer import (
+    attempt_auto_answer,
+    attempt_thread_followup,
+)
+from ..services.message_escalation import (
+    build_escalation_packet,
+    draft_from_prior_property_response,
+    find_similar_property_response,
+    find_similar_unanswered_property_question,
+    record_property_answer,
+)
+
+
+class ConversationTurn(BaseModel):
+    content: str = ""
+    reply_text: str | None = None
+    category: str | None = None
+    triage_state: str | None = None
+    ts: str | None = None
+    author: str | None = None
 
 
 class ProcessMessageRequest(BaseModel):
@@ -1293,6 +1311,7 @@ class ProcessMessageRequest(BaseModel):
     message_type: str = "messages"   # comments | messages | review | mentions
     author: str | None = None
     interaction_id: int | None = None
+    conversation_history: list[ConversationTurn] = Field(default_factory=list)
 
 
 def _log_auto_response(
@@ -1384,10 +1403,41 @@ Return plain text only — no subject line, no greeting.
 """.strip()
 
 
-def _generate_reply_now_draft(message: str, category: str, client_name: str, client_id: int) -> str:
+def _normalize_conversation_history(turns: list[ConversationTurn], limit: int = 5) -> list[dict[str, Any]]:
+    history: list[dict[str, Any]] = []
+    for turn in turns[-limit:]:
+        content = (turn.content or "").strip()
+        reply = (turn.reply_text or "").strip()
+        if not content and not reply:
+            continue
+        history.append({
+            "content": content,
+            "reply_text": reply or None,
+            "category": turn.category,
+            "triage_state": turn.triage_state,
+            "ts": turn.ts,
+            "author": turn.author,
+        })
+    return history
+
+
+def _generate_reply_now_draft(
+    message: str,
+    category: str,
+    client_name: str,
+    client_id: int,
+    conversation_history: list[dict[str, Any]] | None = None,
+) -> str:
     """Generate a suggested reply for reply_now categories (appreciation, spam, etc.)."""
     api_key = (getenv("OPENAI_API_KEY") or "").strip()
     model = (getenv("OPENAI_MODEL") or "gpt-5.4-mini").strip()
+
+    history_block = ""
+    if conversation_history:
+        from ..services.message_auto_answer import _format_conversation_history
+        formatted = _format_conversation_history(conversation_history)
+        if formatted:
+            history_block = f"\nRecent conversation history:\n{formatted}\n"
 
     if api_key:
         try:
@@ -1396,7 +1446,7 @@ def _generate_reply_now_draft(message: str, category: str, client_name: str, cli
             response = _client.responses.create(
                 model=model,
                 instructions=_REPLY_NOW_SYSTEM_PROMPT,
-                input=f"Hotel: {client_name}\nCategory: {category}\nGuest message: {message[:800]}",
+                input=f"Hotel: {client_name}\nCategory: {category}{history_block}\nGuest message: {message[:800]}",
                 max_output_tokens=150,
                 temperature=0.4,
             )
@@ -1422,6 +1472,7 @@ def process_incoming_message(payload: ProcessMessageRequest) -> dict[str, Any]:
     """
     message = (payload.message_content or "").strip()
     client_id = payload.client_id
+    conversation_history = _normalize_conversation_history(payload.conversation_history or [])
 
     # Resolve client name for human-like replies
     client_name = "the hotel"
@@ -1445,10 +1496,91 @@ def process_incoming_message(payload: ProcessMessageRequest) -> dict[str, Any]:
     escalation_packet_dict = None
     suggested_reply_only = None  # 0.70-0.89 confidence draft for ops
     pending_reply_draft = None   # draft for reply_now categories (appreciation, spam, etc.)
+    used_conversation_context = False
+    used_prior_property_response = False
+    prior_property_match = None
+    faq_can_answer = False
+    is_critical = (
+        classification.category == "crisis"
+        or classification.urgency_level == "critical"
+    )
+
+    # ── Stage 1.6: Reuse a prior property answer for this client ─────────────
+    # If this exact/similar question was already asked to the property, do not
+    # raise it again unless the new message is critical/crisis.
+    # Runs before thread follow-up so a real property answer beats a generic
+    # "we're checking" draft sitting in Recent Conversations.
+    if not is_critical:
+        prior_match = find_similar_property_response(
+            message,
+            client_id,
+            extra_candidates=_property_chat_candidates(client_id),
+        )
+        if prior_match and prior_match.property_reply:
+            reused_draft = draft_from_prior_property_response(message, client_name, prior_match)
+            used_prior_property_response = True
+            prior_property_match = prior_match.to_dict()
+            auto_answered = True
+            auto_answer_draft = reused_draft
+            auto_answer_confidence = round(min(0.94, max(0.88, prior_match.score)), 3)
+            auto_answer_source_table = prior_match.source
+            auto_answer_source_excerpt = prior_match.property_reply[:300]
+            triage_state = "auto_replied"
+            _log_auto_response(
+                message_id=None,
+                client_id=client_id,
+                category=classification.category,
+                urgency=classification.urgency_level,
+                draft=auto_answer_draft,
+                confidence=auto_answer_confidence,
+                source_table="prior_property_response",
+                source_excerpt=f"Guest: {prior_match.guest_message[:180]} Property: {prior_match.property_reply[:180]}",
+                ops_action="auto_replied",
+                final_answer=auto_answer_draft,
+            )
+
+    # ── Stage 1.5: Answer from the last 5 window turns when this is a follow-up ──
+    # Example: bag already confirmed held → "is my bag found?" should not re-escalate.
+    if not auto_answered and classification.category != "crisis":
+        thread_result = attempt_thread_followup(message, client_name, conversation_history)
+        if thread_result and thread_result.draft:
+            used_conversation_context = True
+            auto_answer_confidence = thread_result.confidence
+            auto_answer_source_table = thread_result.source_table
+            auto_answer_source_excerpt = thread_result.source_excerpt
+            if thread_result.auto_answered:
+                auto_answered = True
+                auto_answer_draft = thread_result.draft
+                triage_state = "auto_replied"
+                _log_auto_response(
+                    message_id=None,
+                    client_id=client_id,
+                    category=classification.category,
+                    urgency=classification.urgency_level,
+                    draft=auto_answer_draft,
+                    confidence=auto_answer_confidence,
+                    source_table=auto_answer_source_table,
+                    source_excerpt=auto_answer_source_excerpt,
+                    ops_action="auto_replied",
+                    final_answer=auto_answer_draft,
+                )
+            else:
+                suggested_reply_only = thread_result.draft
+                triage_state = "pending_ops_approval"
 
     # ── Stage 2: FAQ Auto-Answer (for questions only) ─────────────────────────
-    if classification.category in ("question", "booking_related") and not classification.requires_ops_action:
-        auto_result = attempt_auto_answer(message, client_id, client_name)
+    if (
+        not auto_answered
+        and not used_conversation_context
+        and classification.category in ("question", "booking_related")
+        and not classification.requires_ops_action
+    ):
+        auto_result = attempt_auto_answer(
+            message,
+            client_id,
+            client_name,
+            conversation_history=conversation_history,
+        )
         auto_answer_confidence = auto_result.confidence
         auto_answer_source_table = auto_result.source_table
         auto_answer_source_excerpt = auto_result.source_excerpt
@@ -1456,6 +1588,7 @@ def process_incoming_message(payload: ProcessMessageRequest) -> dict[str, Any]:
         if auto_result.auto_answered:
             # High confidence + grounding passed — mark as auto-replied but still show for approval
             auto_answered = True
+            faq_can_answer = True
             auto_answer_draft = auto_result.draft
             triage_state = "auto_replied"
 
@@ -1473,8 +1606,12 @@ def process_incoming_message(payload: ProcessMessageRequest) -> dict[str, Any]:
                 final_answer=auto_answer_draft,
             )
 
-        elif auto_result.confidence >= SUGGESTED_REPLY_THRESHOLD:
-            # Partial confidence — send to ops as suggested reply
+        elif auto_result.draft:
+            # FAQ/property details already answer — ops can review the draft,
+            # but do not raise a property alert / Property Chat.
+            faq_can_answer = True
+            pending_reply_draft = auto_result.draft
+            auto_answer_draft = auto_result.draft
             suggested_reply_only = auto_result.draft
             triage_state = "pending_ops_approval"
         else:
@@ -1482,16 +1619,30 @@ def process_incoming_message(payload: ProcessMessageRequest) -> dict[str, Any]:
 
     # ── Stage 2b: Draft reply for non-escalated categories (appreciation, spam, reply_now) ──
     # Always generate a suggested reply so ops can review before sending — never send blind.
-    elif classification.category in ("appreciation", "spam") or (
-        not classification.requires_ops_action
-        and classification.urgency_level == "low"
-        and triage_state == "reply_now"
+    elif (
+        not auto_answered
+        and not used_conversation_context
+        and (
+            classification.category in ("appreciation", "spam")
+            or (
+                not classification.requires_ops_action
+                and classification.urgency_level == "low"
+                and triage_state == "reply_now"
+            )
+        )
     ):
-        pending_reply_draft = _generate_reply_now_draft(message, classification.category, client_name, client_id)
+        pending_reply_draft = _generate_reply_now_draft(
+            message,
+            classification.category,
+            client_name,
+            client_id,
+            conversation_history=conversation_history,
+        )
 
     # ── Stage 3: Escalation ───────────────────────────────────────────────────
     needs_escalation = (
         not auto_answered
+        and not faq_can_answer
         and (
             classification.requires_ops_action
             or classification.category in ("complaint", "crisis", "in_house_request", "external_dm")
@@ -1499,6 +1650,20 @@ def process_incoming_message(payload: ProcessMessageRequest) -> dict[str, Any]:
             or triage_state == "pending_ops_approval"
         )
     )
+
+    if needs_escalation and not is_critical:
+        # Same question already with property (waiting on an answer) — do not re-ask.
+        already_asked = find_similar_unanswered_property_question(message, client_id)
+        if already_asked:
+            needs_escalation = False
+            triage_state = "pending_ops_approval"
+            if not suggested_reply_only:
+                suggested_reply_only = (
+                    "Our property team is already looking into this and will follow up shortly. "
+                    "We will share the confirmed details as soon as we have them."
+                )
+            pending_reply_draft = suggested_reply_only
+            prior_property_match = already_asked.to_dict()
 
     if needs_escalation:
         packet = build_escalation_packet(
@@ -1509,6 +1674,7 @@ def process_incoming_message(payload: ProcessMessageRequest) -> dict[str, Any]:
             interaction_id=payload.interaction_id,
             auto_answer_draft=suggested_reply_only,
             message_type=payload.message_type,
+            conversation_history=conversation_history,
         )
         escalation_packet_dict = packet.to_dict()
         triage_state = packet.triage_state
@@ -1545,6 +1711,10 @@ def process_incoming_message(payload: ProcessMessageRequest) -> dict[str, Any]:
         "ops_action_type": classification.ops_action_type,
         "escalation_packet": escalation_packet_dict,
         "triage_state": triage_state,
+        "used_conversation_context": used_conversation_context,
+        "conversation_turns_used": len(conversation_history),
+        "used_prior_property_response": used_prior_property_response,
+        "prior_property_match": prior_property_match,
     }
 
 
@@ -1656,6 +1826,28 @@ from collections import defaultdict as _defaultdict
 _PROPERTY_CHAT: dict[str, list[dict]] = _defaultdict(list)
 
 
+def _property_chat_candidates(client_id: int) -> list[dict[str, Any]]:
+    """Property Chat answers for this client in the current process (all chat keys)."""
+    prefix = f"{int(client_id)}_"
+    out: list[dict[str, Any]] = []
+    for key, msgs in _PROPERTY_CHAT.items():
+        if not str(key).startswith(prefix):
+            continue
+        for msg in msgs or []:
+            if str(msg.get("sender") or "") != "property":
+                continue
+            guest = str(msg.get("guest_message") or "").strip()
+            reply = str(msg.get("text") or "").strip()
+            if guest and reply:
+                out.append({
+                    "guest_message": guest,
+                    "property_reply": reply,
+                    "replied_at": msg.get("ts"),
+                    "source": "property_chat",
+                })
+    return out
+
+
 class PropertyReplyRequest(BaseModel):
     chat_key: str               # unique identifier for the alert/conversation
     client_id: int
@@ -1735,6 +1927,7 @@ def post_property_reply(payload: PropertyReplyRequest) -> dict[str, Any]:
         "sender":  "property",
         "text":    payload.property_reply,
         "ts":      now,
+        "guest_message": payload.guest_message,
     })
 
     # Generate guest-facing reply from the property's answer
@@ -1754,6 +1947,7 @@ def post_property_reply(payload: PropertyReplyRequest) -> dict[str, Any]:
     })
 
     # Log to auto_response_log for learning
+    record_property_answer(payload.client_id, payload.guest_message, payload.property_reply)
     _log_auto_response(
         message_id    = None,
         client_id     = payload.client_id,
@@ -1762,7 +1956,7 @@ def post_property_reply(payload: PropertyReplyRequest) -> dict[str, Any]:
         draft         = guest_reply,
         confidence    = 1.0,
         source_table  = "property_chat",
-        source_excerpt= payload.property_reply[:200],
+        source_excerpt= f"Guest: {(payload.guest_message or '')[:180]} Property: {payload.property_reply[:180]}",
         ops_action    = "auto_replied",
         final_answer  = guest_reply,
     )

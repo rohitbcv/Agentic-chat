@@ -32,6 +32,8 @@ load_dotenv()
 
 AUTO_ANSWER_THRESHOLD = 0.90
 SUGGESTED_REPLY_THRESHOLD = 0.70
+# FAQ/property note is relevant enough to answer without asking the property.
+FAQ_CONTEXT_THRESHOLD = 0.18
 
 # ── Dataclasses ───────────────────────────────────────────────────────────────
 
@@ -88,7 +90,10 @@ def _tokenize(text: str) -> set[str]:
         "and", "or", "but", "not", "this", "that", "it", "its", "i", "my",
         "your", "we", "our", "you", "hotel", "property", "guest", "please",
     }
-    tokens = re.findall(r"[a-z0-9]+", text.lower())
+    lowered = (text or "").lower().replace("-", " ").replace("/", " ")
+    for src, dst in (("checkout", "check out"), ("checkin", "check in")):
+        lowered = lowered.replace(src, dst)
+    tokens = re.findall(r"[a-z0-9]+", lowered)
     return {t for t in tokens if t not in STOP and len(t) > 2}
 
 
@@ -228,16 +233,35 @@ def _get_recent_learning_examples(client_id: int, limit: int = 5) -> list[dict[s
 
 _DRAFT_SYSTEM_PROMPT = """
 You are a warm, professional hotel concierge writing a reply to a guest message.
-Write a concise, human-like response using ONLY the provided FAQ evidence.
+Write a concise, human-like response using ONLY the provided FAQ evidence and conversation history.
 Rules:
 1. Answer directly and warmly. Use "we" for the hotel. Never say "according to our FAQ".
 2. If the evidence answers the question fully, give a confident complete answer.
 3. If the evidence only partially answers, give what you know and acknowledge the gap.
-4. Never invent facts not present in the evidence.
+4. Never invent facts not present in the evidence or conversation history.
 5. Keep it to 2-4 sentences unless listing multiple items.
 6. Do not include a subject line or greeting — start directly with the answer.
 7. End with an offer to help further if appropriate.
+8. If the current message is a follow-up (e.g. "is my bag found?", "did you get it?"), use the
+   conversation history to answer — if a previous Hotel reply already confirmed it, reaffirm that
+   confidently without re-escalating.
 """.strip()
+
+
+def _format_conversation_history(history: list[dict[str, Any]], limit: int = 5) -> str:
+    """Format recent conversation history into a readable block for the LLM."""
+    if not history:
+        return ""
+    recent = history[-limit:]
+    lines = []
+    for item in recent:
+        guest_msg = (item.get("content") or "").strip()
+        hotel_reply = (item.get("reply_text") or "").strip()
+        if guest_msg:
+            lines.append(f"Guest: {guest_msg[:300]}")
+        if hotel_reply:
+            lines.append(f"Hotel: {hotel_reply[:300]}")
+    return "\n".join(lines)
 
 
 def _generate_llm_draft(
@@ -245,6 +269,7 @@ def _generate_llm_draft(
     best_notes: list[SourceRow],
     client_name: str,
     few_shot_examples: list[dict[str, Any]],
+    conversation_history: list[dict[str, Any]] | None = None,
 ) -> str | None:
     api_key = (getenv("OPENAI_API_KEY") or "").strip()
     model = (getenv("OPENAI_MODEL") or "gpt-5.4-mini").strip()
@@ -267,9 +292,17 @@ def _generate_llm_draft(
         if examples:
             few_shot_block = "\n\nPrevious approved replies for context:\n" + "\n\n".join(examples)
 
+    # Conversation history block — gives LLM awareness of prior exchanges
+    history_block = ""
+    if conversation_history:
+        formatted = _format_conversation_history(conversation_history)
+        if formatted:
+            history_block = f"\n\nRecent conversation history (last 5 exchanges):\n{formatted}\n"
+
     input_text = (
         f"Hotel: {client_name}\n"
-        f"Guest message: {message[:600]}\n\n"
+        f"{history_block}"
+        f"Current guest message: {message[:600]}\n\n"
         f"Approved FAQ evidence:{few_shot_block}\n{evidence_block}"
     )
 
@@ -282,6 +315,130 @@ def _generate_llm_draft(
             input=input_text,
             max_output_tokens=300,
             temperature=0.3,
+        )
+        answer = str(getattr(response, "output_text", "") or "").strip()
+        return answer if len(answer) > 10 else None
+    except Exception:
+        return None
+
+
+_FOLLOW_UP_CUES = (
+    "found", "safe", "pick", "coming", "still", "yet", "update", "status",
+    "did you", "have you", "is it", "was it", "my bag", "the bag", "left behind",
+    "hold it", "holding", "confirm", "confirmed", "ready", "same", "that item",
+)
+
+_THREAD_FOLLOWUP_PROMPT = """
+You are a warm, professional hotel concierge. The guest sent a FOLLOW-UP in an existing conversation.
+Answer using ONLY the recent conversation history below (prior guest messages and hotel/property replies).
+Rules:
+1. If a previous hotel reply already answered this (item found, being held, cab rebooked, etc.), reaffirm that clearly.
+2. Never invent new facts. Do not claim the item was found unless a prior hotel reply said so.
+3. Do not re-ask the guest to start over or say you will escalate again if the history already resolved it.
+4. 2-4 sentences. No subject line. Start directly with the answer.
+""".strip()
+
+
+def attempt_thread_followup(
+    message: str,
+    client_name: str,
+    conversation_history: list[dict[str, Any]] | None,
+) -> AutoAnswerResult | None:
+    """
+    If the current message is a follow-up on the last 5 window turns and those
+    turns already contain a hotel/property reply, draft an answer from that thread.
+    Returns None when the history is empty or not relevant.
+    """
+    recent = [item for item in (conversation_history or [])[-5:] if isinstance(item, dict)]
+    if not recent:
+        return None
+
+    prior_guest = " ".join(str(item.get("content") or "") for item in recent)
+    prior_replies = [str(item.get("reply_text") or "").strip() for item in recent]
+    prior_replies = [reply for reply in prior_replies if reply]
+    if not prior_replies:
+        return None
+
+    combined = f"{prior_guest} {' '.join(prior_replies)}"
+    overlap = _lexical_score(message, combined)
+    message_lower = (message or "").lower()
+    cue_hit = any(cue in message_lower for cue in _FOLLOW_UP_CUES)
+    if overlap < 0.08 and not cue_hit:
+        return None
+    if overlap < 0.05:
+        return None
+
+    source_rows = [
+        SourceRow(
+            table="conversation_history",
+            title="Prior hotel reply",
+            excerpt=reply[:600],
+            score=overlap,
+        )
+        for reply in prior_replies[-3:]
+    ]
+    if prior_guest.strip():
+        source_rows.append(
+            SourceRow(
+                table="conversation_history",
+                title="Prior guest messages",
+                excerpt=prior_guest[:600],
+                score=overlap,
+            )
+        )
+
+    draft = _generate_thread_followup_draft(message, client_name, recent)
+    if not draft:
+        latest = prior_replies[-1]
+        draft = (
+            f"Yes — following up on your earlier message: {latest[:280].rstrip('.')}. "
+            "We'll have this ready for you. Please let us know if you need anything else."
+        )
+
+    grounding_passed, grounding_issues = _validate_grounding(draft, source_rows)
+    confidence = round(min(0.95, max(0.88, 0.82 + overlap)), 3)
+    if not grounding_passed:
+        confidence = max(0.72, confidence - 0.08 * len(grounding_issues))
+
+    auto_answered = confidence >= AUTO_ANSWER_THRESHOLD and grounding_passed
+    return AutoAnswerResult(
+        auto_answered=auto_answered,
+        draft=draft,
+        confidence=confidence,
+        source_table="conversation_history",
+        source_excerpt=prior_replies[-1][:300],
+        source_rows=source_rows,
+        grounding_passed=grounding_passed,
+        grounding_issues=grounding_issues,
+        answer_method="thread_followup",
+    )
+
+
+def _generate_thread_followup_draft(
+    message: str,
+    client_name: str,
+    conversation_history: list[dict[str, Any]],
+) -> str | None:
+    api_key = (getenv("OPENAI_API_KEY") or "").strip()
+    model = (getenv("OPENAI_MODEL") or "gpt-5.4-mini").strip()
+    formatted = _format_conversation_history(conversation_history)
+    if not formatted:
+        return None
+    if not api_key:
+        return None
+    try:
+        from openai import OpenAI
+        client = OpenAI(api_key=api_key)
+        response = client.responses.create(
+            model=model,
+            instructions=_THREAD_FOLLOWUP_PROMPT,
+            input=(
+                f"Hotel: {client_name}\n\n"
+                f"Recent conversation history (last 5 exchanges):\n{formatted}\n\n"
+                f"Current follow-up from guest: {message[:600]}"
+            ),
+            max_output_tokens=250,
+            temperature=0.2,
         )
         answer = str(getattr(response, "output_text", "") or "").strip()
         return answer if len(answer) > 10 else None
@@ -332,6 +489,7 @@ def attempt_auto_answer(
     client_name: str = "the hotel",
     *,
     use_embeddings: bool = False,
+    conversation_history: list[dict[str, Any]] | None = None,
 ) -> AutoAnswerResult:
     """
     Attempt to auto-answer a guest message from FAQ/property data.
@@ -381,8 +539,8 @@ def attempt_auto_answer(
     best = scored[:4]   # top 4 most relevant
     top_score = best[0].score if best else 0.0
 
-    if top_score < SUGGESTED_REPLY_THRESHOLD:
-        # Not enough evidence for even a suggested reply
+    if top_score < FAQ_CONTEXT_THRESHOLD:
+        # Not enough evidence to answer from FAQ/property details
         return AutoAnswerResult(
             auto_answered=False,
             draft=None,
@@ -397,7 +555,7 @@ def attempt_auto_answer(
     few_shot = _get_recent_learning_examples(client_id)
 
     # Generate LLM draft
-    draft = _generate_llm_draft(message, best, client_name, few_shot)
+    draft = _generate_llm_draft(message, best, client_name, few_shot, conversation_history=conversation_history)
 
     if not draft:
         # No LLM available — build a deterministic template answer from best note
