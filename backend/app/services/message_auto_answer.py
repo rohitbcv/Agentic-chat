@@ -89,12 +89,23 @@ def _tokenize(text: str) -> set[str]:
         "on", "with", "at", "by", "from", "up", "about", "into", "through",
         "and", "or", "but", "not", "this", "that", "it", "its", "i", "my",
         "your", "we", "our", "you", "hotel", "property", "guest", "please",
+        "what", "when", "where", "which", "who", "how",
     }
     lowered = (text or "").lower().replace("-", " ").replace("/", " ")
     for src, dst in (("checkout", "check out"), ("checkin", "check in")):
         lowered = lowered.replace(src, dst)
     tokens = re.findall(r"[a-z0-9]+", lowered)
-    return {t for t in tokens if t not in STOP and len(t) > 2}
+    out: set[str] = set()
+    for t in tokens:
+        if t in STOP or len(t) <= 2:
+            continue
+        out.add(t)
+        # Light stemming so pet/pets, dog/dogs still match
+        if len(t) > 3 and t.endswith("s"):
+            out.add(t[:-1])
+        elif len(t) > 3:
+            out.add(t + "s")
+    return out
 
 
 def _lexical_score(query: str, document: str) -> float:
@@ -233,19 +244,82 @@ def _get_recent_learning_examples(client_id: int, limit: int = 5) -> list[dict[s
 
 _DRAFT_SYSTEM_PROMPT = """
 You are a warm, professional hotel concierge writing a reply to a guest message.
-Write a concise, human-like response using ONLY the provided FAQ evidence and conversation history.
+Write a concise, human-like response using ONLY the provided FAQ evidence.
 Rules:
 1. Answer directly and warmly. Use "we" for the hotel. Never say "according to our FAQ".
 2. If the evidence answers the question fully, give a confident complete answer.
 3. If the evidence only partially answers, give what you know and acknowledge the gap.
-4. Never invent facts not present in the evidence or conversation history.
+4. Never invent facts not present in the evidence.
 5. Keep it to 2-4 sentences unless listing multiple items.
 6. Do not include a subject line or greeting — start directly with the answer.
 7. End with an offer to help further if appropriate.
-8. If the current message is a follow-up (e.g. "is my bag found?", "did you get it?"), use the
-   conversation history to answer — if a previous Hotel reply already confirmed it, reaffirm that
-   confidently without re-escalating.
+8. If conversation history is provided, use it ONLY when it is clearly about the SAME topic as
+   the current guest message (true follow-up). If history is about a different topic, IGNORE it
+   completely — do not mention prior topics, do not say you lack details from history, and answer
+   only from the FAQ evidence for the current question.
 """.strip()
+
+# Minimum lexical overlap with a single prior *guest* turn before treating it as related.
+CONVERSATION_RELEVANCE_THRESHOLD = 0.28
+
+_STRONG_FOLLOW_UP_CUES = (
+    "my bag", "the bag", "left behind", "hold it", "holding it",
+    "did you find", "have you found", "is it found", "is my",
+    "any update on", "still holding", "same request",
+)
+
+
+def find_best_matching_conversation_turn(
+    message: str,
+    conversation_history: list[dict[str, Any]] | None,
+) -> tuple[dict[str, Any] | None, float]:
+    """
+    Find the single prior guest turn most related to the current message.
+    Compares against each turn individually — never against a concatenated blob,
+    which incorrectly linked check-in questions to unrelated pet replies.
+    """
+    recent = [item for item in (conversation_history or [])[-5:] if isinstance(item, dict)]
+    if not message or not recent:
+        return None, 0.0
+
+    best_turn: dict[str, Any] | None = None
+    best_score = 0.0
+    for turn in recent:
+        guest = str(turn.get("content") or "").strip()
+        if not guest:
+            continue
+        score = _lexical_score(message, guest)
+        if score > best_score:
+            best_score = score
+            best_turn = turn
+
+    if best_turn and best_score >= CONVERSATION_RELEVANCE_THRESHOLD:
+        return best_turn, best_score
+
+    message_lower = (message or "").lower()
+    cue_hit = any(cue in message_lower for cue in _STRONG_FOLLOW_UP_CUES)
+    if best_turn and cue_hit and best_score >= 0.12:
+        return best_turn, best_score
+
+    return None, 0.0
+
+
+def conversation_history_is_relevant(
+    message: str,
+    conversation_history: list[dict[str, Any]] | None,
+) -> bool:
+    """True only when the current message matches a specific prior guest turn."""
+    turn, _ = find_best_matching_conversation_turn(message, conversation_history)
+    return turn is not None
+
+
+def relevant_conversation_history(
+    message: str,
+    conversation_history: list[dict[str, Any]] | None,
+) -> list[dict[str, Any]]:
+    """Return at most the one prior turn that is actually related to this message."""
+    turn, _ = find_best_matching_conversation_turn(message, conversation_history)
+    return [turn] if turn else []
 
 
 def _format_conversation_history(history: list[dict[str, Any]], limit: int = 5) -> str:
@@ -294,10 +368,14 @@ def _generate_llm_draft(
 
     # Conversation history block — gives LLM awareness of prior exchanges
     history_block = ""
-    if conversation_history:
-        formatted = _format_conversation_history(conversation_history)
+    related = relevant_conversation_history(message, conversation_history)
+    if related:
+        formatted = _format_conversation_history(related)
         if formatted:
-            history_block = f"\n\nRecent conversation history (last 5 exchanges):\n{formatted}\n"
+            history_block = (
+                "\n\nRelated conversation history (same topic only — ignore if unrelated):\n"
+                f"{formatted}\n"
+            )
 
     input_text = (
         f"Hotel: {client_name}\n"
@@ -322,20 +400,16 @@ def _generate_llm_draft(
         return None
 
 
-_FOLLOW_UP_CUES = (
-    "found", "safe", "pick", "coming", "still", "yet", "update", "status",
-    "did you", "have you", "is it", "was it", "my bag", "the bag", "left behind",
-    "hold it", "holding", "confirm", "confirmed", "ready", "same", "that item",
-)
-
 _THREAD_FOLLOWUP_PROMPT = """
-You are a warm, professional hotel concierge. The guest sent a FOLLOW-UP in an existing conversation.
-Answer using ONLY the recent conversation history below (prior guest messages and hotel/property replies).
+You are a warm, professional hotel concierge. The guest sent a FOLLOW-UP on the SAME topic
+as the recent conversation history below.
+Answer using ONLY that history (prior guest messages and hotel/property replies).
 Rules:
 1. If a previous hotel reply already answered this (item found, being held, cab rebooked, etc.), reaffirm that clearly.
 2. Never invent new facts. Do not claim the item was found unless a prior hotel reply said so.
 3. Do not re-ask the guest to start over or say you will escalate again if the history already resolved it.
-4. 2-4 sentences. No subject line. Start directly with the answer.
+4. Do not bring up unrelated earlier topics.
+5. 2-4 sentences. No subject line. Start directly with the answer.
 """.strip()
 
 
@@ -347,51 +421,37 @@ def attempt_thread_followup(
     """
     If the current message is a follow-up on the last 5 window turns and those
     turns already contain a hotel/property reply, draft an answer from that thread.
-    Returns None when the history is empty or not relevant.
+    Returns None when the history is empty or not topically related.
     """
-    recent = [item for item in (conversation_history or [])[-5:] if isinstance(item, dict)]
-    if not recent:
+    matched_turn, overlap = find_best_matching_conversation_turn(message, conversation_history)
+    if not matched_turn:
         return None
 
-    prior_guest = " ".join(str(item.get("content") or "") for item in recent)
-    prior_replies = [str(item.get("reply_text") or "").strip() for item in recent]
-    prior_replies = [reply for reply in prior_replies if reply]
-    if not prior_replies:
+    prior_reply = str(matched_turn.get("reply_text") or "").strip()
+    prior_guest = str(matched_turn.get("content") or "").strip()
+    if not prior_reply:
         return None
 
-    combined = f"{prior_guest} {' '.join(prior_replies)}"
-    overlap = _lexical_score(message, combined)
-    message_lower = (message or "").lower()
-    cue_hit = any(cue in message_lower for cue in _FOLLOW_UP_CUES)
-    if overlap < 0.08 and not cue_hit:
-        return None
-    if overlap < 0.05:
-        return None
-
+    recent = [matched_turn]
     source_rows = [
         SourceRow(
             table="conversation_history",
-            title="Prior hotel reply",
-            excerpt=reply[:600],
+            title="Prior guest message",
+            excerpt=prior_guest[:600],
             score=overlap,
-        )
-        for reply in prior_replies[-3:]
+        ),
+        SourceRow(
+            table="conversation_history",
+            title="Prior hotel reply",
+            excerpt=prior_reply[:600],
+            score=overlap,
+        ),
     ]
-    if prior_guest.strip():
-        source_rows.append(
-            SourceRow(
-                table="conversation_history",
-                title="Prior guest messages",
-                excerpt=prior_guest[:600],
-                score=overlap,
-            )
-        )
 
     draft = _generate_thread_followup_draft(message, client_name, recent)
     if not draft:
-        latest = prior_replies[-1]
         draft = (
-            f"Yes — following up on your earlier message: {latest[:280].rstrip('.')}. "
+            f"Yes — following up on your earlier message: {prior_reply[:280].rstrip('.')}. "
             "We'll have this ready for you. Please let us know if you need anything else."
         )
 
@@ -406,7 +466,7 @@ def attempt_thread_followup(
         draft=draft,
         confidence=confidence,
         source_table="conversation_history",
-        source_excerpt=prior_replies[-1][:300],
+        source_excerpt=f"Guest: {prior_guest[:120]} → Hotel: {prior_reply[:160]}",
         source_rows=source_rows,
         grounding_passed=grounding_passed,
         grounding_issues=grounding_issues,
@@ -575,12 +635,19 @@ def attempt_auto_answer(
     confidence = round(min(confidence, 0.99), 3)
     auto_answered = confidence >= AUTO_ANSWER_THRESHOLD and grounding_passed
 
+    best_note = best[0] if best else None
+    source_excerpt = None
+    if best_note:
+        title = (best_note.title or "FAQ").strip()
+        excerpt = (best_note.excerpt or "").strip()
+        source_excerpt = f"{title}: {excerpt[:260]}" if title else excerpt[:300]
+
     return AutoAnswerResult(
         auto_answered=auto_answered,
         draft=draft,
         confidence=confidence,
-        source_table=best[0].table if best else None,
-        source_excerpt=best[0].excerpt[:300] if best else None,
+        source_table=best_note.table if best_note else None,
+        source_excerpt=source_excerpt,
         source_rows=best,
         grounding_passed=grounding_passed,
         grounding_issues=grounding_issues,

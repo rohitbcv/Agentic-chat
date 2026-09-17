@@ -191,10 +191,15 @@ def _generate_escalation_suggestions(
 
     history_block = ""
     if conversation_history:
-        from .message_auto_answer import _format_conversation_history
-        formatted = _format_conversation_history(conversation_history)
-        if formatted:
-            history_block = f"\nRecent conversation history (last 5 exchanges):\n{formatted}\n"
+        from .message_auto_answer import (
+            _format_conversation_history,
+            relevant_conversation_history,
+        )
+        related = relevant_conversation_history(message, conversation_history)
+        if related:
+            formatted = _format_conversation_history(related)
+            if formatted:
+                history_block = f"\nRelated conversation history (same topic):\n{formatted}\n"
 
     # Channel note instructs LLM to adjust tone for public vs private
     channel_note = (

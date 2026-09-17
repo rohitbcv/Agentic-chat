@@ -44,10 +44,11 @@ export default function App() {
   const [inboxError, setInboxError] = useState("");
   const [opsDecisionSent, setOpsDecisionSent] = useState(false);
   const [editedReply, setEditedReply] = useState("");
-  // Conversation history
+  // Conversation history — per active client (loaded from backend inbox thread + DB)
   const [convHistory, setConvHistory]       = useState([]);
   const [historyLoading, setHistoryLoading] = useState(false);
   const historyBottomRef = useRef(null);
+  const historyFetchGen = useRef(0);
   // Property chat — guest reply generated from property's answer
   const [generatedGuestReply, setGeneratedGuestReply] = useState(null);
 
@@ -67,27 +68,41 @@ export default function App() {
     return () => { ignore = true; };
   }, []);
 
-  // ── Load conversation history when client changes or inbox view is opened ──
-  const fetchConversationHistory = async (clientId) => {
-    if (!clientId) return;
+  const activeInboxClientId = sessionClientId || (selectedClientId ? Number(selectedClientId) : null);
+
+  // ── Load this client's last 5 inbox turns when client changes ──
+  const fetchConversationHistory = async (clientId, { markNewest = false } = {}) => {
+    if (!clientId) {
+      setConvHistory([]);
+      return;
+    }
+    const fetchId = ++historyFetchGen.current;
     setHistoryLoading(true);
     try {
       const res = await fetch(apiUrl(`/api/agent-poc/conversation-history?client_id=${clientId}&limit=5`));
       if (!res.ok) throw new Error("History fetch failed");
       const data = await res.json();
-      setConvHistory(data.history || []);
+      if (fetchId !== historyFetchGen.current) return;
+      const history = (data.history || []).slice(-5);
+      if (markNewest && history.length > 0) {
+        history[history.length - 1] = { ...history[history.length - 1], _isNew: true };
+      }
+      setConvHistory(history);
     } catch (_) {
-      setConvHistory([]);
+      if (fetchId === historyFetchGen.current) setConvHistory([]);
     } finally {
-      setHistoryLoading(false);
+      if (fetchId === historyFetchGen.current) setHistoryLoading(false);
     }
   };
 
-  // Fetch history when switching to inbox view or when client is resolved
   useEffect(() => {
-    const clientId = sessionClientId || (selectedClientId ? Number(selectedClientId) : null);
-    if (mainView === "inbox" && clientId) fetchConversationHistory(clientId);
-  }, [mainView, sessionClientId, selectedClientId]);
+    if (mainView !== "inbox") return;
+    if (activeInboxClientId) {
+      fetchConversationHistory(activeInboxClientId);
+    } else {
+      setConvHistory([]);
+    }
+  }, [mainView, activeInboxClientId]);
 
   // Scroll history to bottom when it changes
   useEffect(() => {
@@ -224,29 +239,7 @@ export default function App() {
         || data.pending_reply_draft
         || "";
       setEditedReply(draft);
-
-      // ── Append to conversation history immediately ──
-      const channelLabels = {
-        messages: "💬 Direct Message",
-        comments: "🌐 Social Comment",
-        review:   "⭐ Platform Review",
-        mentions: "📢 Brand Mention",
-      };
-      const newEntry = {
-        message_id:    null,          // not yet persisted
-        ts:            new Date().toISOString(),
-        content:       msg,
-        author:        "Guest",
-        message_type:  inboxMessageType,
-        channel_label: channelLabels[inboxMessageType] || "📨 Message",
-        category:      data.classification?.category,
-        urgency_level: data.classification?.urgency_level,
-        triage_state:  data.triage_state,
-        reply_text:    draft || null,
-        ops_action:    data.auto_answered ? "auto_replied" : data.triage_state === "escalated_crisis" ? "escalated" : "pending",
-        _isNew:        true,          // highlight newest entry
-      };
-      setConvHistory((prev) => [...prev, newEntry]);
+      await fetchConversationHistory(clientId, { markNewest: true });
     } catch (err) {
       setInboxError(err.message || "Something went wrong.");
     } finally {
@@ -263,6 +256,7 @@ export default function App() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           client_id: clientId,
+          guest_message: inboxResult.message_content,
           ops_action: action,
           final_answer: editedReply,
           original_draft: inboxResult.escalation_packet?.suggested_reply || inboxResult.auto_answer_draft,
@@ -272,6 +266,7 @@ export default function App() {
         }),
       });
       setOpsDecisionSent(true);
+      if (clientId) await fetchConversationHistory(clientId);
     } catch (err) {
       setInboxError("Failed to record ops decision.");
     }
@@ -307,6 +302,10 @@ export default function App() {
             onChange={(e) => {
               setSelectedClientId(e.target.value);
               if (e.target.value) { setSessionClientId(null); setSessionClientName(null); }
+              setInboxResult(null);
+              setInboxInput("");
+              setOpsDecisionSent(false);
+              setGeneratedGuestReply(null);
             }}
           >
             <option value="">Auto-detect from query</option>
@@ -506,7 +505,7 @@ export default function App() {
                     </span>
                   )}
                   {inboxResult.used_conversation_context && (
-                    <span className="inboxConfBadge">Used last {inboxResult.conversation_turns_used || 5} conversation turns</span>
+                    <span className="inboxConfBadge">Used matching prior message in thread</span>
                   )}
                   {inboxResult.used_prior_property_response && (
                     <span className="inboxConfBadge">Reused earlier property reply — not re-asked</span>
@@ -573,14 +572,10 @@ export default function App() {
                         </div>
                       )}
 
-                      {isAutoHigh && inboxResult.auto_answer_source_table && (
+                      {isAutoHigh && (inboxResult.auto_answer_source_label || inboxResult.auto_answer_source_excerpt) && (
                         <div className="inboxSourceNote">
-                          Source: {inboxResult.auto_answer_source_table === "conversation_history"
-                            ? "earlier messages in this window"
-                            : inboxResult.used_prior_property_response
-                            ? "prior property response for this client"
-                            : inboxResult.auto_answer_source_table}
-                          {inboxResult.auto_answer_source_excerpt ? ` — "${inboxResult.auto_answer_source_excerpt.slice(0, 120)}…"` : ""}
+                          Source: {inboxResult.auto_answer_source_label || inboxResult.auto_answer_source_table || "verified property data"}
+                          {inboxResult.auto_answer_source_excerpt ? ` — "${inboxResult.auto_answer_source_excerpt.slice(0, 140)}…"` : ""}
                         </div>
                       )}
 
@@ -622,7 +617,7 @@ export default function App() {
               </div>
 
               {!historyLoading && convHistory.length === 0 && (
-                <p className="convHistoryEmpty">No messages found for this client in the last 30 days.</p>
+                <p className="convHistoryEmpty">No recent messages for this client yet. Process a guest message to start this thread.</p>
               )}
 
               <div className="convHistoryList">
@@ -857,30 +852,10 @@ export default function App() {
           inboxResult={inboxResult}
           clientId={sessionClientId || (selectedClientId ? Number(selectedClientId) : null)}
           clientName={inboxResult?.client_name}
-          onGuestReplyGenerated={(reply) => {
+          onGuestReplyGenerated={async (reply) => {
             setGeneratedGuestReply(reply);
-            // Append the auto-generated reply to conversation history
-            const channelLabels = {
-              messages: "💬 Direct Message", comments: "🌐 Social Comment",
-              review: "⭐ Platform Review",  mentions: "📢 Brand Mention",
-            };
-            setConvHistory((prev) => [
-              ...prev,
-              {
-                message_id:    null,
-                ts:            new Date().toISOString(),
-                content:       inboxResult.message_content,
-                author:        "Guest",
-                message_type:  inboxResult.message_type || "messages",
-                channel_label: channelLabels[inboxResult.message_type] || "📨 Message",
-                category:      inboxResult.classification?.category,
-                urgency_level: inboxResult.classification?.urgency_level,
-                triage_state:  "auto_replied",
-                reply_text:    reply,
-                ops_action:    "auto_replied",
-                _isNew:        true,
-              },
-            ]);
+            const clientId = sessionClientId || (selectedClientId ? Number(selectedClientId) : null);
+            if (clientId) await fetchConversationHistory(clientId);
           }}
         />
       )}

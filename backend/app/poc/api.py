@@ -1,12 +1,13 @@
 from __future__ import annotations
 
-from collections import Counter
+from collections import Counter, defaultdict
 from datetime import date, datetime, timezone
 from decimal import Decimal
 from html import escape
 import hashlib
 import json
 import re
+import uuid
 from os import getenv
 from typing import Any
 from urllib.parse import quote
@@ -1286,6 +1287,7 @@ from ..services.message_classifier import classify_message
 from ..services.message_auto_answer import (
     attempt_auto_answer,
     attempt_thread_followup,
+    relevant_conversation_history,
 )
 from ..services.message_escalation import (
     build_escalation_packet,
@@ -1403,6 +1405,26 @@ Return plain text only — no subject line, no greeting.
 """.strip()
 
 
+def _format_auto_answer_source_label(
+    source_table: str | None,
+    *,
+    used_prior_property: bool = False,
+    used_conversation: bool = False,
+) -> str | None:
+    """Human-readable source label for the UI confidence panel."""
+    if used_prior_property:
+        return "prior property reply for this client"
+    if used_conversation or source_table == "conversation_history":
+        return "matching prior message in this thread"
+    if source_table == "clients.property_details":
+        return "property details"
+    if source_table == "clients.client_notes":
+        return "FAQ / client notes"
+    if source_table == "prior_property_response":
+        return "prior property reply for this client"
+    return source_table
+
+
 def _normalize_conversation_history(turns: list[ConversationTurn], limit: int = 5) -> list[dict[str, Any]]:
     history: list[dict[str, Any]] = []
     for turn in turns[-limit:]:
@@ -1433,11 +1455,12 @@ def _generate_reply_now_draft(
     model = (getenv("OPENAI_MODEL") or "gpt-5.4-mini").strip()
 
     history_block = ""
-    if conversation_history:
+    related = relevant_conversation_history(message, conversation_history or [])
+    if related:
         from ..services.message_auto_answer import _format_conversation_history
-        formatted = _format_conversation_history(conversation_history)
+        formatted = _format_conversation_history(related)
         if formatted:
-            history_block = f"\nRecent conversation history:\n{formatted}\n"
+            history_block = f"\nRelated conversation history:\n{formatted}\n"
 
     if api_key:
         try:
@@ -1505,6 +1528,9 @@ def process_incoming_message(payload: ProcessMessageRequest) -> dict[str, Any]:
         or classification.urgency_level == "critical"
     )
 
+    # Only the one prior turn that actually matches this message (not the whole window).
+    related_history = relevant_conversation_history(message, conversation_history)
+
     # ── Stage 1.6: Reuse a prior property answer for this client ─────────────
     # If this exact/similar question was already asked to the property, do not
     # raise it again unless the new message is critical/crisis.
@@ -1539,10 +1565,58 @@ def process_incoming_message(payload: ProcessMessageRequest) -> dict[str, Any]:
                 final_answer=auto_answer_draft,
             )
 
-    # ── Stage 1.5: Answer from the last 5 window turns when this is a follow-up ──
+    # ── Stage 2: FAQ / property details (prefer over thread for new questions) ──
+    if (
+        not auto_answered
+        and classification.category in ("question", "booking_related")
+        and not classification.requires_ops_action
+    ):
+        auto_result = attempt_auto_answer(
+            message,
+            client_id,
+            client_name,
+            conversation_history=[],  # FAQ answers from property data only
+        )
+        auto_answer_confidence = auto_result.confidence
+        auto_answer_source_table = auto_result.source_table
+        auto_answer_source_excerpt = auto_result.source_excerpt
+
+        if auto_result.auto_answered:
+            auto_answered = True
+            faq_can_answer = True
+            auto_answer_draft = auto_result.draft
+            triage_state = "auto_replied"
+            _log_auto_response(
+                message_id=None,
+                client_id=client_id,
+                category=classification.category,
+                urgency=classification.urgency_level,
+                draft=auto_answer_draft,
+                confidence=auto_answer_confidence,
+                source_table=auto_answer_source_table,
+                source_excerpt=auto_answer_source_excerpt,
+                ops_action="auto_replied",
+                final_answer=auto_answer_draft,
+            )
+
+        elif auto_result.draft:
+            faq_can_answer = True
+            pending_reply_draft = auto_result.draft
+            auto_answer_draft = auto_result.draft
+            suggested_reply_only = auto_result.draft
+            triage_state = "pending_ops_approval"
+        else:
+            triage_state = "pending_ops_approval"
+
+    # ── Stage 1.5: Thread follow-up only when FAQ did not answer ──────────────
     # Example: bag already confirmed held → "is my bag found?" should not re-escalate.
-    if not auto_answered and classification.category != "crisis":
-        thread_result = attempt_thread_followup(message, client_name, conversation_history)
+    if (
+        not auto_answered
+        and not faq_can_answer
+        and related_history
+        and classification.category != "crisis"
+    ):
+        thread_result = attempt_thread_followup(message, client_name, related_history)
         if thread_result and thread_result.draft:
             used_conversation_context = True
             auto_answer_confidence = thread_result.confidence
@@ -1568,55 +1642,6 @@ def process_incoming_message(payload: ProcessMessageRequest) -> dict[str, Any]:
                 suggested_reply_only = thread_result.draft
                 triage_state = "pending_ops_approval"
 
-    # ── Stage 2: FAQ Auto-Answer (for questions only) ─────────────────────────
-    if (
-        not auto_answered
-        and not used_conversation_context
-        and classification.category in ("question", "booking_related")
-        and not classification.requires_ops_action
-    ):
-        auto_result = attempt_auto_answer(
-            message,
-            client_id,
-            client_name,
-            conversation_history=conversation_history,
-        )
-        auto_answer_confidence = auto_result.confidence
-        auto_answer_source_table = auto_result.source_table
-        auto_answer_source_excerpt = auto_result.source_excerpt
-
-        if auto_result.auto_answered:
-            # High confidence + grounding passed — mark as auto-replied but still show for approval
-            auto_answered = True
-            faq_can_answer = True
-            auto_answer_draft = auto_result.draft
-            triage_state = "auto_replied"
-
-            # Log to auto_response_log
-            _log_auto_response(
-                message_id=None,
-                client_id=client_id,
-                category=classification.category,
-                urgency=classification.urgency_level,
-                draft=auto_answer_draft,
-                confidence=auto_answer_confidence,
-                source_table=auto_answer_source_table,
-                source_excerpt=auto_answer_source_excerpt,
-                ops_action="auto_replied",
-                final_answer=auto_answer_draft,
-            )
-
-        elif auto_result.draft:
-            # FAQ/property details already answer — ops can review the draft,
-            # but do not raise a property alert / Property Chat.
-            faq_can_answer = True
-            pending_reply_draft = auto_result.draft
-            auto_answer_draft = auto_result.draft
-            suggested_reply_only = auto_result.draft
-            triage_state = "pending_ops_approval"
-        else:
-            triage_state = "pending_ops_approval"
-
     # ── Stage 2b: Draft reply for non-escalated categories (appreciation, spam, reply_now) ──
     # Always generate a suggested reply so ops can review before sending — never send blind.
     elif (
@@ -1636,7 +1661,7 @@ def process_incoming_message(payload: ProcessMessageRequest) -> dict[str, Any]:
             classification.category,
             client_name,
             client_id,
-            conversation_history=conversation_history,
+            conversation_history=related_history,
         )
 
     # ── Stage 3: Escalation ───────────────────────────────────────────────────
@@ -1674,7 +1699,7 @@ def process_incoming_message(payload: ProcessMessageRequest) -> dict[str, Any]:
             interaction_id=payload.interaction_id,
             auto_answer_draft=suggested_reply_only,
             message_type=payload.message_type,
-            conversation_history=conversation_history,
+            conversation_history=related_history,
         )
         escalation_packet_dict = packet.to_dict()
         triage_state = packet.triage_state
@@ -1693,10 +1718,37 @@ def process_incoming_message(payload: ProcessMessageRequest) -> dict[str, Any]:
             final_answer=None,
         )
 
+    # ── Persist turn on this client's inbox thread ────────────────────────────
+    reply_draft = (
+        auto_answer_draft
+        or pending_reply_draft
+        or suggested_reply_only
+        or (escalation_packet_dict or {}).get("suggested_reply")
+    )
+    inbox_turn = _append_inbox_thread_turn(
+        client_id=client_id,
+        content=message,
+        author=payload.author or "Guest",
+        message_type=payload.message_type,
+        channel_label=classification.channel_label,
+        category=classification.category,
+        urgency_level=classification.urgency_level,
+        triage_state=triage_state,
+        reply_text=reply_draft,
+        ops_action=(
+            "auto_replied"
+            if auto_answered
+            else "escalated"
+            if triage_state == "escalated_crisis"
+            else "pending"
+        ),
+    )
+
     # ── Response ──────────────────────────────────────────────────────────────
     return {
         "message_content": message,
         "client_id": client_id,
+        "inbox_turn_id": inbox_turn.get("turn_id"),
         "client_name": client_name,
         "message_type": payload.message_type,
         "channel_label": classification.channel_label,
@@ -1706,16 +1758,123 @@ def process_incoming_message(payload: ProcessMessageRequest) -> dict[str, Any]:
         "auto_answer_confidence": round(auto_answer_confidence, 3),
         "auto_answer_source_table": auto_answer_source_table,
         "auto_answer_source_excerpt": auto_answer_source_excerpt,
+        "auto_answer_source_label": _format_auto_answer_source_label(
+            auto_answer_source_table,
+            used_prior_property=used_prior_property_response,
+            used_conversation=used_conversation_context,
+        ),
         "pending_reply_draft": pending_reply_draft,   # for reply_now categories (appreciation, etc.)
         "requires_ops_action": classification.requires_ops_action,
         "ops_action_type": classification.ops_action_type,
         "escalation_packet": escalation_packet_dict,
         "triage_state": triage_state,
         "used_conversation_context": used_conversation_context,
-        "conversation_turns_used": len(conversation_history),
+        "conversation_turns_used": len(related_history),
         "used_prior_property_response": used_prior_property_response,
         "prior_property_match": prior_property_match,
     }
+
+
+# ── Inbox thread: per-client conversation memory (inbox monitor session) ─────
+
+_INBOX_THREADS: dict[int, list[dict[str, Any]]] = defaultdict(list)
+_INBOX_THREAD_MAX = 100
+
+_CHANNEL_LABELS = {
+    "messages": "💬 Direct Message",
+    "comments": "🌐 Social Comment",
+    "review": "⭐ Platform Review",
+    "mentions": "📢 Brand Mention",
+}
+
+
+def _normalize_thread_content(text: str) -> str:
+    return re.sub(r"\s+", " ", (text or "").strip().lower())
+
+
+def _append_inbox_thread_turn(
+    *,
+    client_id: int,
+    content: str,
+    author: str = "Guest",
+    message_type: str = "messages",
+    channel_label: str | None = None,
+    category: str | None = None,
+    urgency_level: str | None = None,
+    triage_state: str | None = None,
+    reply_text: str | None = None,
+    ops_action: str | None = None,
+) -> dict[str, Any]:
+    """Append a guest turn to this client's inbox thread."""
+    guest = (content or "").strip()
+    if not client_id or not guest:
+        return {}
+    turn = {
+        "turn_id": f"turn-{uuid.uuid4().hex[:12]}",
+        "message_id": None,
+        "ts": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "content": guest,
+        "author": author or "Guest",
+        "message_type": message_type or "messages",
+        "channel_label": channel_label or _CHANNEL_LABELS.get(message_type or "messages", "📨 Message"),
+        "category": category,
+        "urgency_level": urgency_level,
+        "triage_state": triage_state,
+        "reply_text": (reply_text or "").strip() or None,
+        "ops_action": ops_action,
+        "source": "inbox_monitor",
+    }
+    key = int(client_id)
+    _INBOX_THREADS[key].append(turn)
+    if len(_INBOX_THREADS[key]) > _INBOX_THREAD_MAX:
+        _INBOX_THREADS[key] = _INBOX_THREADS[key][-_INBOX_THREAD_MAX:]
+    return turn
+
+
+def _update_inbox_thread_reply(
+    client_id: int,
+    guest_message: str,
+    reply_text: str | None,
+    ops_action: str,
+) -> bool:
+    """Update the most recent matching guest turn with a final reply."""
+    key = int(client_id)
+    needle = _normalize_thread_content(guest_message)
+    if not key or not needle:
+        return False
+    turns = _INBOX_THREADS.get(key) or []
+    for turn in reversed(turns):
+        if _normalize_thread_content(str(turn.get("content") or "")) == needle:
+            turn["reply_text"] = (reply_text or "").strip() or turn.get("reply_text")
+            turn["ops_action"] = ops_action
+            turn["triage_state"] = "auto_replied" if ops_action in {"approved", "edited", "auto_replied"} else turn.get("triage_state")
+            return True
+    return False
+
+
+def _inbox_thread_history(client_id: int) -> list[dict[str, Any]]:
+    return list(_INBOX_THREADS.get(int(client_id), []))
+
+
+def _merge_client_conversation_history(
+    db_history: list[dict[str, Any]],
+    inbox_turns: list[dict[str, Any]],
+    limit: int = 5,
+) -> list[dict[str, Any]]:
+    """Merge seeded DB messages with live inbox-monitor turns; return last `limit`."""
+    combined: list[dict[str, Any]] = []
+    seen: set[tuple[str, str]] = set()
+    for row in db_history + inbox_turns:
+        content_key = _normalize_thread_content(str(row.get("content") or ""))[:220]
+        reply_key = _normalize_thread_content(str(row.get("reply_text") or ""))[:220]
+        dedupe_key = (content_key, reply_key)
+        if content_key and dedupe_key in seen:
+            continue
+        if content_key:
+            seen.add(dedupe_key)
+        combined.append(dict(row))
+    combined.sort(key=lambda item: str(item.get("ts") or ""))
+    return combined[-limit:]
 
 
 @router.get("/conversation-history")
@@ -1813,17 +1972,22 @@ def get_conversation_history(client_id: int, limit: int = 5) -> dict[str, Any]:
             "triage_state":  row.get("triage_state"),
             "reply_text":    reply_text,
             "ops_action":    ops_action,
+            "source":        "jx_bridge.messages",
         })
 
-    return {"client_id": client_id, "limit": limit, "history": history}
+    merged = _merge_client_conversation_history(
+        history,
+        _inbox_thread_history(client_id),
+        limit=limit,
+    )
+    return {"client_id": client_id, "limit": limit, "history": merged}
 
 
 # ── Property Chat: in-memory session store ────────────────────────────────────
 # Keyed by "{client_id}_{chat_key}" where chat_key is a short identifier
 # (interaction_id or a frontend-generated UUID for brand-new messages).
 # Each value is a list of message dicts: {sender, text, ts, guest_reply (opt)}
-from collections import defaultdict as _defaultdict
-_PROPERTY_CHAT: dict[str, list[dict]] = _defaultdict(list)
+_PROPERTY_CHAT: dict[str, list[dict]] = defaultdict(list)
 
 
 def _property_chat_candidates(client_id: int) -> list[dict[str, Any]]:
@@ -1948,6 +2112,12 @@ def post_property_reply(payload: PropertyReplyRequest) -> dict[str, Any]:
 
     # Log to auto_response_log for learning
     record_property_answer(payload.client_id, payload.guest_message, payload.property_reply)
+    _update_inbox_thread_reply(
+        payload.client_id,
+        payload.guest_message,
+        guest_reply,
+        "auto_replied",
+    )
     _log_auto_response(
         message_id    = None,
         client_id     = payload.client_id,
@@ -1970,17 +2140,20 @@ def post_property_reply(payload: PropertyReplyRequest) -> dict[str, Any]:
     }
 
 
+class OpsDecisionRequest(BaseModel):
+    message_id: int | None = None
+    client_id: int = 0
+    guest_message: str | None = None
+    ops_action: str = "approved"       # approved | edited | rejected
+    final_answer: str | None = None
+    original_draft: str | None = None
+    category: str = "question"
+    urgency_level: str = "low"
+    source_excerpt: str | None = None
+
+
 @router.post("/process-message/ops-decision")
-def record_ops_decision(
-    message_id: int | None = None,
-    client_id: int = 0,
-    ops_action: str = "approved",     # approved | edited | rejected
-    final_answer: str | None = None,
-    original_draft: str | None = None,
-    category: str = "question",
-    urgency_level: str = "low",
-    source_excerpt: str | None = None,
-) -> dict[str, Any]:
+def record_ops_decision(payload: OpsDecisionRequest) -> dict[str, Any]:
     """
     Record the ops team's decision on an escalated message.
 
@@ -1988,22 +2161,31 @@ def record_ops_decision(
     - edited: ops modified the reply → store as learned FAQ
     - rejected: ops rejected the draft → no learning, log for review
     """
+    ops_action = payload.ops_action
+    client_id = payload.client_id
+    final_answer = payload.final_answer
+    original_draft = payload.original_draft
     was_edited = ops_action == "edited" and final_answer and final_answer != original_draft
 
     # Store correction as learned FAQ for future auto-answers
-    if was_edited and client_id and source_excerpt and final_answer:
-        _store_learned_faq(client_id, source_excerpt, final_answer)
+    if was_edited and client_id and payload.source_excerpt and final_answer:
+        _store_learned_faq(client_id, payload.source_excerpt, final_answer)
+
+    if client_id and payload.guest_message and ops_action in {"approved", "edited"}:
+        _update_inbox_thread_reply(client_id, payload.guest_message, final_answer, ops_action)
+    elif client_id and payload.guest_message and ops_action == "rejected":
+        _update_inbox_thread_reply(client_id, payload.guest_message, None, "rejected")
 
     # Log the decision
     _log_auto_response(
-        message_id=message_id,
+        message_id=payload.message_id,
         client_id=client_id,
-        category=category,
-        urgency=urgency_level,
+        category=payload.category,
+        urgency=payload.urgency_level,
         draft=original_draft,
         confidence=1.0,  # ops-confirmed
         source_table=None,
-        source_excerpt=source_excerpt,
+        source_excerpt=payload.source_excerpt,
         ops_action=ops_action,
         final_answer=final_answer,
     )
