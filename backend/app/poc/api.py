@@ -1852,8 +1852,27 @@ def _update_inbox_thread_reply(
     return False
 
 
+def _remove_inbox_thread_turn(client_id: int, guest_message: str) -> bool:
+    """Discard the most recent matching guest turn (used when ops rejects)."""
+    key = int(client_id)
+    needle = _normalize_thread_content(guest_message)
+    if not key or not needle:
+        return False
+    turns = _INBOX_THREADS.get(key) or []
+    for idx in range(len(turns) - 1, -1, -1):
+        if _normalize_thread_content(str(turns[idx].get("content") or "")) == needle:
+            turns.pop(idx)
+            return True
+    return False
+
+
 def _inbox_thread_history(client_id: int) -> list[dict[str, Any]]:
-    return list(_INBOX_THREADS.get(int(client_id), []))
+    """Return live inbox turns, excluding any that were marked rejected."""
+    return [
+        turn
+        for turn in (_INBOX_THREADS.get(int(client_id), []) or [])
+        if str(turn.get("ops_action") or "") != "rejected"
+    ]
 
 
 def _merge_client_conversation_history(
@@ -1865,6 +1884,8 @@ def _merge_client_conversation_history(
     combined: list[dict[str, Any]] = []
     seen: set[tuple[str, str]] = set()
     for row in db_history + inbox_turns:
+        if str(row.get("ops_action") or "") == "rejected":
+            continue
         content_key = _normalize_thread_content(str(row.get("content") or ""))[:220]
         reply_key = _normalize_thread_content(str(row.get("reply_text") or ""))[:220]
         dedupe_key = (content_key, reply_key)
@@ -2159,13 +2180,14 @@ def record_ops_decision(payload: OpsDecisionRequest) -> dict[str, Any]:
 
     - approved: ops sends the AI-suggested reply as-is
     - edited: ops modified the reply → store as learned FAQ
-    - rejected: ops rejected the draft → no learning, log for review
+    - rejected: discard the draft and remove it from this client's conversation history
     """
     ops_action = payload.ops_action
     client_id = payload.client_id
     final_answer = payload.final_answer
     original_draft = payload.original_draft
     was_edited = ops_action == "edited" and final_answer and final_answer != original_draft
+    discarded = False
 
     # Store correction as learned FAQ for future auto-answers
     if was_edited and client_id and payload.source_excerpt and final_answer:
@@ -2174,9 +2196,10 @@ def record_ops_decision(payload: OpsDecisionRequest) -> dict[str, Any]:
     if client_id and payload.guest_message and ops_action in {"approved", "edited"}:
         _update_inbox_thread_reply(client_id, payload.guest_message, final_answer, ops_action)
     elif client_id and payload.guest_message and ops_action == "rejected":
-        _update_inbox_thread_reply(client_id, payload.guest_message, None, "rejected")
+        # Reject = discard: do not keep this turn in Recent Conversations
+        discarded = _remove_inbox_thread_turn(client_id, payload.guest_message)
 
-    # Log the decision
+    # Log the decision (audit only — rejected turns are not shown in thread UI)
     _log_auto_response(
         message_id=payload.message_id,
         client_id=client_id,
@@ -2187,16 +2210,19 @@ def record_ops_decision(payload: OpsDecisionRequest) -> dict[str, Any]:
         source_table=None,
         source_excerpt=payload.source_excerpt,
         ops_action=ops_action,
-        final_answer=final_answer,
+        final_answer=None if ops_action == "rejected" else final_answer,
     )
 
     return {
         "recorded": True,
         "ops_action": ops_action,
+        "discarded": discarded,
         "learned_faq_stored": was_edited,
         "message": (
             "Correction stored as a learned FAQ for future auto-answers."
             if was_edited
+            else "Draft rejected and removed from conversation history."
+            if ops_action == "rejected"
             else f"Decision '{ops_action}' logged."
         ),
     }

@@ -258,15 +258,25 @@ export default function App() {
           client_id: clientId,
           guest_message: inboxResult.message_content,
           ops_action: action,
-          final_answer: editedReply,
+          final_answer: action === "rejected" ? null : editedReply,
           original_draft: inboxResult.escalation_packet?.suggested_reply || inboxResult.auto_answer_draft,
           category: inboxResult.classification?.category,
           urgency_level: inboxResult.classification?.urgency_level,
           source_excerpt: inboxResult.auto_answer_source_excerpt,
         }),
       });
-      setOpsDecisionSent(true);
-      if (clientId) await fetchConversationHistory(clientId);
+      if (action === "rejected") {
+        // Discard: clear current draft and reload thread without this message
+        setOpsDecisionSent(false);
+        setInboxResult(null);
+        setEditedReply("");
+        setGeneratedGuestReply(null);
+        setInboxInput("");
+        if (clientId) await fetchConversationHistory(clientId);
+      } else {
+        setOpsDecisionSent(true);
+        if (clientId) await fetchConversationHistory(clientId);
+      }
     } catch (err) {
       setInboxError("Failed to record ops decision.");
     }
