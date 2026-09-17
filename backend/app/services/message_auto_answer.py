@@ -330,11 +330,18 @@ def _format_conversation_history(history: list[dict[str, Any]], limit: int = 5) 
     lines = []
     for item in recent:
         guest_msg = (item.get("content") or "").strip()
-        hotel_reply = (item.get("reply_text") or "").strip()
         if guest_msg:
             lines.append(f"Guest: {guest_msg[:300]}")
-        if hotel_reply:
-            lines.append(f"Hotel: {hotel_reply[:300]}")
+        replies = item.get("replies") if isinstance(item.get("replies"), list) else None
+        if replies:
+            for reply in replies:
+                hotel_reply = str((reply or {}).get("text") or "").strip()
+                if hotel_reply:
+                    lines.append(f"Hotel: {hotel_reply[:300]}")
+        else:
+            hotel_reply = (item.get("reply_text") or "").strip()
+            if hotel_reply:
+                lines.append(f"Hotel: {hotel_reply[:300]}")
     return "\n".join(lines)
 
 

@@ -1301,6 +1301,7 @@ from ..services.message_escalation import (
 class ConversationTurn(BaseModel):
     content: str = ""
     reply_text: str | None = None
+    replies: list[dict[str, Any]] = Field(default_factory=list)
     category: str | None = None
     triage_state: str | None = None
     ts: str | None = None
@@ -1430,11 +1431,24 @@ def _normalize_conversation_history(turns: list[ConversationTurn], limit: int = 
     for turn in turns[-limit:]:
         content = (turn.content or "").strip()
         reply = (turn.reply_text or "").strip()
-        if not content and not reply:
+        replies = [
+            {
+                "text": str(item.get("text") or "").strip(),
+                "ops_action": item.get("ops_action"),
+                "source": item.get("source"),
+            }
+            for item in (turn.replies or [])
+            if isinstance(item, dict) and str(item.get("text") or "").strip()
+        ]
+        if not replies and reply:
+            replies = [{"text": reply, "ops_action": None, "source": None}]
+        if not content and not reply and not replies:
             continue
+        latest = replies[-1]["text"] if replies else (reply or None)
         history.append({
             "content": content,
-            "reply_text": reply or None,
+            "reply_text": latest,
+            "replies": replies,
             "category": turn.category,
             "triage_state": turn.triage_state,
             "ts": turn.ts,
@@ -1792,6 +1806,55 @@ def _normalize_thread_content(text: str) -> str:
     return re.sub(r"\s+", " ", (text or "").strip().lower())
 
 
+def _make_reply_entry(
+    text: str,
+    ops_action: str | None = None,
+    *,
+    source: str | None = None,
+) -> dict[str, Any]:
+    return {
+        "text": (text or "").strip(),
+        "ops_action": ops_action,
+        "source": source,
+        "ts": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+    }
+
+
+def _ensure_turn_replies(turn: dict[str, Any]) -> list[dict[str, Any]]:
+    """Normalize a turn to always have a `replies` list (legacy reply_text supported)."""
+    replies = turn.get("replies")
+    if isinstance(replies, list) and replies:
+        return replies
+    migrated: list[dict[str, Any]] = []
+    legacy = (turn.get("reply_text") or "").strip()
+    if legacy:
+        migrated.append(_make_reply_entry(
+            legacy,
+            turn.get("ops_action"),
+            source=str(turn.get("source") or "inbox_monitor"),
+        ))
+    turn["replies"] = migrated
+    return migrated
+
+
+def _sync_turn_reply_fields(turn: dict[str, Any]) -> None:
+    """Keep reply_text/ops_action as the latest reply for follow-up + older UI clients."""
+    replies = _ensure_turn_replies(turn)
+    if replies:
+        latest = replies[-1]
+        turn["reply_text"] = latest.get("text")
+        turn["ops_action"] = latest.get("ops_action") or turn.get("ops_action")
+    else:
+        turn["reply_text"] = None
+
+
+def _serialize_inbox_turn(turn: dict[str, Any]) -> dict[str, Any]:
+    out = dict(turn)
+    _ensure_turn_replies(out)
+    _sync_turn_reply_fields(out)
+    return out
+
+
 def _append_inbox_thread_turn(
     *,
     client_id: int,
@@ -1809,6 +1872,8 @@ def _append_inbox_thread_turn(
     guest = (content or "").strip()
     if not client_id or not guest:
         return {}
+    draft = (reply_text or "").strip()
+    replies = [_make_reply_entry(draft, ops_action, source="inbox_monitor")] if draft else []
     turn = {
         "turn_id": f"turn-{uuid.uuid4().hex[:12]}",
         "message_id": None,
@@ -1820,8 +1885,9 @@ def _append_inbox_thread_turn(
         "category": category,
         "urgency_level": urgency_level,
         "triage_state": triage_state,
-        "reply_text": (reply_text or "").strip() or None,
+        "reply_text": draft or None,
         "ops_action": ops_action,
+        "replies": replies,
         "source": "inbox_monitor",
     }
     key = int(client_id)
@@ -1836,19 +1902,53 @@ def _update_inbox_thread_reply(
     guest_message: str,
     reply_text: str | None,
     ops_action: str,
+    *,
+    append: bool = False,
+    source: str | None = None,
 ) -> bool:
-    """Update the most recent matching guest turn with a final reply."""
+    """
+    Update the most recent matching guest turn's hotel reply.
+
+    - append=False (approve/edit): set/replace the primary (first) reply, keep later ones
+    - append=True (property reply): add another hotel reply without overwriting earlier ones
+    """
     key = int(client_id)
     needle = _normalize_thread_content(guest_message)
     if not key or not needle:
         return False
+    text = (reply_text or "").strip()
+    if not text:
+        return False
     turns = _INBOX_THREADS.get(key) or []
     for turn in reversed(turns):
-        if _normalize_thread_content(str(turn.get("content") or "")) == needle:
-            turn["reply_text"] = (reply_text or "").strip() or turn.get("reply_text")
-            turn["ops_action"] = ops_action
-            turn["triage_state"] = "auto_replied" if ops_action in {"approved", "edited", "auto_replied"} else turn.get("triage_state")
-            return True
+        if _normalize_thread_content(str(turn.get("content") or "")) != needle:
+            continue
+        replies = _ensure_turn_replies(turn)
+        entry = _make_reply_entry(text, ops_action, source=source or ("property_chat" if append else "inbox_monitor"))
+        if append:
+            # Skip exact duplicate of the latest reply
+            if replies and _normalize_thread_content(str(replies[-1].get("text") or "")) == _normalize_thread_content(text):
+                replies[-1]["ops_action"] = ops_action
+                replies[-1]["source"] = entry["source"]
+            else:
+                replies.append(entry)
+        else:
+            if replies:
+                # Update primary draft/approved reply; preserve later property follow-ups
+                replies[0] = {
+                    **replies[0],
+                    "text": text,
+                    "ops_action": ops_action,
+                    "source": source or replies[0].get("source") or "inbox_monitor",
+                    "ts": entry["ts"],
+                }
+            else:
+                replies.append(entry)
+        turn["replies"] = replies
+        if ops_action in {"approved", "edited", "auto_replied"}:
+            turn["triage_state"] = "auto_replied"
+        _sync_turn_reply_fields(turn)
+        return True
     return False
 
 
@@ -1868,11 +1968,17 @@ def _remove_inbox_thread_turn(client_id: int, guest_message: str) -> bool:
 
 def _inbox_thread_history(client_id: int) -> list[dict[str, Any]]:
     """Return live inbox turns, excluding any that were marked rejected."""
-    return [
-        turn
-        for turn in (_INBOX_THREADS.get(int(client_id), []) or [])
-        if str(turn.get("ops_action") or "") != "rejected"
-    ]
+    out: list[dict[str, Any]] = []
+    for turn in (_INBOX_THREADS.get(int(client_id), []) or []):
+        serialized = _serialize_inbox_turn(turn)
+        if str(serialized.get("ops_action") or "") == "rejected":
+            continue
+        # Also skip if every reply was rejected (shouldn't happen after remove)
+        replies = serialized.get("replies") or []
+        if replies and all(str(r.get("ops_action") or "") == "rejected" for r in replies):
+            continue
+        out.append(serialized)
+    return out
 
 
 def _merge_client_conversation_history(
@@ -1993,6 +2099,10 @@ def get_conversation_history(client_id: int, limit: int = 5) -> dict[str, Any]:
             "triage_state":  row.get("triage_state"),
             "reply_text":    reply_text,
             "ops_action":    ops_action,
+            "replies": (
+                [{"text": reply_text, "ops_action": ops_action, "source": "jx_bridge.messages"}]
+                if reply_text else []
+            ),
             "source":        "jx_bridge.messages",
         })
 
@@ -2138,6 +2248,8 @@ def post_property_reply(payload: PropertyReplyRequest) -> dict[str, Any]:
         payload.guest_message,
         guest_reply,
         "auto_replied",
+        append=True,
+        source="property_chat",
     )
     _log_auto_response(
         message_id    = None,

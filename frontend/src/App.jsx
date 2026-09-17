@@ -222,6 +222,7 @@ export default function App() {
           conversation_history: convHistory.slice(-5).map((item) => ({
             content: item.content || "",
             reply_text: item.reply_text || "",
+            replies: Array.isArray(item.replies) ? item.replies : undefined,
             category: item.category || null,
             triage_state: item.triage_state || null,
             ts: item.ts || null,
@@ -665,20 +666,38 @@ export default function App() {
                         <p className="convMsgText">{item.content}</p>
                       </div>
 
-                      {/* Response bubble (if any) */}
-                      {item.reply_text && (
-                        <div className="convMsgBubble convMsgBubble--hotel">
-                          <span className="convMsgAuthor">
-                            Hotel
-                            {item.ops_action && (
-                              <span className={`convOpsTag convOpsTag--${item.ops_action}`}>{
-                                { auto_replied: "auto", approved: "ops ✓", edited: "ops ✎", rejected: "rejected", pending: "pending", escalated: "escalated" }[item.ops_action] || item.ops_action
-                              }</span>
-                            )}
-                          </span>
-                          <p className="convMsgText">{item.reply_text}</p>
-                        </div>
-                      )}
+                      {/* Hotel replies — keep approved + property follow-ups both visible */}
+                      {(() => {
+                        const hotelReplies = (Array.isArray(item.replies) && item.replies.length > 0)
+                          ? item.replies.filter((r) => r && (r.text || "").trim())
+                          : (item.reply_text
+                              ? [{ text: item.reply_text, ops_action: item.ops_action, source: item.source }]
+                              : []);
+                        const opsLabel = {
+                          auto_replied: "auto",
+                          approved: "ops ✓",
+                          edited: "ops ✎",
+                          rejected: "rejected",
+                          pending: "pending",
+                          escalated: "escalated",
+                        };
+                        return hotelReplies.map((reply, replyIdx) => (
+                          <div key={replyIdx} className="convMsgBubble convMsgBubble--hotel">
+                            <span className="convMsgAuthor">
+                              Hotel
+                              {reply.source === "property_chat" && (
+                                <span className="convOpsTag convOpsTag--auto_replied">from property</span>
+                              )}
+                              {reply.ops_action && reply.source !== "property_chat" && (
+                                <span className={`convOpsTag convOpsTag--${reply.ops_action}`}>
+                                  {opsLabel[reply.ops_action] || reply.ops_action}
+                                </span>
+                              )}
+                            </span>
+                            <p className="convMsgText">{reply.text}</p>
+                          </div>
+                        ));
+                      })()}
                     </div>
                   );
                 })}
